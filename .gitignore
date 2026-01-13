@@ -1,0 +1,39 @@
+# Environment and secrets
+.env
+
+# Claude Code local settings
+.claude/
+.mcp.json
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+ENV/
+
+# Distribution
+dist/
+build/
+*.egg-info/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Linting/Type checking
+.ruff_cache/
+.mypy_cache/
+
+# Lean output files
+*.solved.lean
