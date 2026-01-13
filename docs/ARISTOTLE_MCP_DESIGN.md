@@ -122,6 +122,7 @@ Check the status of a previously submitted proof job.
 {
   "status": "queued | in_progress | proved | failed | error",
   "project_id": "string",
+  "percent_complete": "number (0-100)",
   "code": "string | null (if proved)",
   "message": "string"
 }
@@ -132,7 +133,8 @@ Check the status of a previously submitted proof job.
 {
   "project_id": "abc-123"
 }
-// Returns: {"status": "proved", "code": "theorem hard_theorem : ... := by exact ...", ...}
+// Returns: {"status": "in_progress", "percent_complete": 45, "project_id": "abc-123", ...}
+// Later:   {"status": "proved", "percent_complete": 100, "code": "theorem hard_theorem : ...", ...}
 ```
 
 ### 3. `prove_file`
@@ -146,14 +148,17 @@ Prove all `sorry` statements in a Lean file, with automatic import resolution fr
 |------|------|----------|-------------|
 | `file_path` | string | Yes | Path to Lean file with `sorry` statements |
 | `output_path` | string | No | Where to write solution (default: `{file}.solved.lean`) |
+| `wait` | boolean | No | If true (default), block until complete. If false, return project_id for polling. |
 
 **Returns:**
 ```json
 {
-  "status": "proved | partial | failed | error",
+  "status": "proved | partial | failed | error | submitted | queued | in_progress",
   "output_path": "string (path to solution file)",
   "sorries_filled": "number",
   "sorries_total": "number",
+  "project_id": "string | null (for async polling)",
+  "percent_complete": "number | null (0-100)",
   "message": "string"
 }
 ```
@@ -163,8 +168,36 @@ Prove all `sorry` statements in a Lean file, with automatic import resolution fr
 - `partial`: Some sorries filled (see counts)
 - `failed`: No sorries could be filled
 - `error`: File not found, parse error, etc.
+- `submitted`: Job submitted (when `wait=false`); use `check_prove_file` to poll
+- `queued`: Waiting to start
+- `in_progress`: Being computed
 
-### 3. `formalize`
+### 4. `check_prove_file`
+
+Check the status of a previously submitted file proof job.
+
+**When to use:** After calling `prove_file` with `wait=false`, poll this tool to check if the proof is complete.
+
+**Parameters:**
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `project_id` | string | Yes | The project ID returned from `prove_file(wait=false)` |
+| `output_path` | string | No | Where to write solution when complete |
+
+**Returns:**
+```json
+{
+  "status": "queued | in_progress | proved | partial | failed | error",
+  "project_id": "string",
+  "percent_complete": "number (0-100)",
+  "sorries_filled": "number (when complete)",
+  "sorries_total": "number (when complete)",
+  "output_path": "string (when complete)",
+  "message": "string"
+}
+```
+
+### 5. `formalize`
 
 Convert a natural language mathematical statement into Lean 4 code.
 
@@ -175,6 +208,7 @@ Convert a natural language mathematical statement into Lean 4 code.
 |------|------|----------|-------------|
 | `description` | string | Yes | Natural language math statement or problem |
 | `prove` | boolean | No | Also attempt to prove the formalized statement (default: false) |
+| `context_file` | string | No | Path to a Lean file providing definitions/context for formalization |
 
 **Returns:**
 ```json

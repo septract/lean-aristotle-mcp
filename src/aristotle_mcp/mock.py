@@ -9,6 +9,7 @@ from typing import TypedDict
 
 # In-memory store for mock async proofs
 _mock_projects: dict[str, MockProjectData] = {}
+_mock_file_projects: dict[str, MockFileProjectData] = {}
 
 
 class MockProjectData(TypedDict):
@@ -21,6 +22,17 @@ class MockProjectData(TypedDict):
     poll_count: int
 
 
+class MockFileProjectData(TypedDict):
+    """Internal storage for mock file proof jobs."""
+
+    status: str
+    output_path: str | None
+    sorries_filled: int
+    sorries_total: int
+    message: str
+    poll_count: int
+
+
 @dataclass
 class MockProveResult:
     """Result from mock prove operation."""
@@ -29,6 +41,7 @@ class MockProveResult:
     code: str | None = None
     counterexample: str | None = None
     project_id: str | None = None
+    percent_complete: int | None = None
     message: str = ""
 
 
@@ -40,6 +53,8 @@ class MockProveFileResult:
     output_path: str | None = None
     sorries_filled: int = 0
     sorries_total: int = 0
+    project_id: str | None = None
+    percent_complete: int | None = None
     message: str = ""
 
 
@@ -177,13 +192,15 @@ def mock_check_proof(project_id: str) -> MockProveResult:
         return MockProveResult(
             status="queued",
             project_id=project_id,
+            percent_complete=0,
             message="Proof is queued, waiting to start",
         )
     elif project["poll_count"] == 2:
         return MockProveResult(
             status="in_progress",
             project_id=project_id,
-            message="Proof is being computed",
+            percent_complete=50,
+            message="Proof is being computed (50% complete)",
         )
     else:
         # Return final result
@@ -192,11 +209,16 @@ def mock_check_proof(project_id: str) -> MockProveResult:
             code=project["code"],
             counterexample=project["counterexample"],
             project_id=project_id,
+            percent_complete=100,
             message=project["message"],
         )
 
 
-def mock_prove_file(file_path: str, output_path: str | None = None) -> MockProveFileResult:
+def mock_prove_file(
+    file_path: str,
+    output_path: str | None = None,
+    wait: bool = True,
+) -> MockProveFileResult:
     """
     Mock implementation of prove_file.
 
@@ -205,6 +227,7 @@ def mock_prove_file(file_path: str, output_path: str | None = None) -> MockProve
     Args:
         file_path: Path to the Lean file
         output_path: Optional output path for the solved file
+        wait: If True, return result immediately. If False, return project_id for polling.
 
     Returns:
         MockProveFileResult with status and counts
@@ -230,28 +253,108 @@ def mock_prove_file(file_path: str, output_path: str | None = None) -> MockProve
         base, ext = os.path.splitext(file_path)
         output_path = f"{base}.solved{ext}"
 
-    # Simulate partial success for files with many sorries
+    # Determine final result
     if sorry_count > 5:
-        filled = sorry_count - 2  # Simulate 2 unfilled
-        return MockProveFileResult(
-            status="partial",
+        final_status = "partial"
+        filled = sorry_count - 2
+        final_message = f"Filled {filled} of {sorry_count} sorry statements"
+    else:
+        final_status = "proved"
+        filled = sorry_count
+        final_message = f"Successfully filled all {sorry_count} sorry statement(s)"
+
+    # Generate project ID
+    project_id = f"mock-file-{uuid.uuid4()}"
+
+    # If not waiting, store the job and return immediately
+    if not wait:
+        _mock_file_projects[project_id] = MockFileProjectData(
+            status=final_status,
             output_path=output_path,
             sorries_filled=filled,
             sorries_total=sorry_count,
-            message=f"Filled {filled} of {sorry_count} sorry statements",
+            message=final_message,
+            poll_count=0,
+        )
+        return MockProveFileResult(
+            status="submitted",
+            sorries_total=sorry_count,
+            project_id=project_id,
+            message="Proof submitted. Use check_prove_file to poll for results.",
         )
 
-    # Full success
+    # Waiting - return final result
     return MockProveFileResult(
-        status="proved",
+        status=final_status,
         output_path=output_path,
-        sorries_filled=sorry_count,
+        sorries_filled=filled,
         sorries_total=sorry_count,
-        message=f"Successfully filled all {sorry_count} sorry statement(s)",
+        project_id=project_id,
+        percent_complete=100,
+        message=final_message,
     )
 
 
-def mock_formalize(description: str, prove: bool = False) -> MockFormalizeResult:
+def mock_check_prove_file(project_id: str) -> MockProveFileResult:
+    """
+    Mock implementation of check_prove_file.
+
+    Simulates async polling for file proofs:
+    - First call: returns "queued"
+    - Second call: returns "in_progress"
+    - Third+ calls: returns the final result
+
+    Args:
+        project_id: The mock project ID to check
+
+    Returns:
+        MockProveFileResult with current status
+    """
+    if project_id not in _mock_file_projects:
+        return MockProveFileResult(
+            status="error",
+            project_id=project_id,
+            message=f"Unknown project ID: {project_id}",
+        )
+
+    project = _mock_file_projects[project_id]
+    project["poll_count"] += 1
+
+    # Simulate progression through statuses
+    if project["poll_count"] == 1:
+        return MockProveFileResult(
+            status="queued",
+            sorries_total=project["sorries_total"],
+            project_id=project_id,
+            percent_complete=0,
+            message="Proof is queued, waiting to start",
+        )
+    elif project["poll_count"] == 2:
+        return MockProveFileResult(
+            status="in_progress",
+            sorries_total=project["sorries_total"],
+            project_id=project_id,
+            percent_complete=50,
+            message="Proof is being computed (50% complete)",
+        )
+    else:
+        # Return final result
+        return MockProveFileResult(
+            status=project["status"],
+            output_path=project["output_path"],
+            sorries_filled=project["sorries_filled"],
+            sorries_total=project["sorries_total"],
+            project_id=project_id,
+            percent_complete=100,
+            message=project["message"],
+        )
+
+
+def mock_formalize(
+    description: str,
+    prove: bool = False,
+    context_file: str | None = None,
+) -> MockFormalizeResult:
     """
     Mock implementation of formalize.
 
@@ -260,11 +363,20 @@ def mock_formalize(description: str, prove: bool = False) -> MockFormalizeResult
     Args:
         description: Natural language description of the theorem
         prove: Whether to also prove the formalized statement
+        context_file: Optional Lean file providing context definitions
 
     Returns:
         MockFormalizeResult with status and Lean code
     """
     description_lower = description.lower()
+
+    # Add context import if provided
+    context_header = ""
+    if context_file:
+        import os
+
+        context_name = os.path.splitext(os.path.basename(context_file))[0]
+        context_header = f"-- Using context from: {context_file}\nimport {context_name}\n\n"
 
     # Generate different formalizations based on keywords
     if "even" in description_lower and "sum" in description_lower:
@@ -300,7 +412,10 @@ theorem statement : True := by
         if prove:
             lean_code = lean_code.replace("sorry", "trivial")
 
+    lean_code = context_header + lean_code
     status = "proved" if prove else "formalized"
     message = "Formalized and proved" if prove else "Successfully formalized to Lean 4"
+    if context_file:
+        message += f" (using context from {context_file})"
 
     return MockFormalizeResult(status=status, lean_code=lean_code, message=message)

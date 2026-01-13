@@ -24,7 +24,7 @@ AI: "Aristotle filled it in using simp."
 
 **Scenario:** User has a Lean project with `lakefile.lean`, Mathlib dependencies, and custom definitions across multiple files. They want to prove theorems in a specific file.
 
-**Flow:**
+**Flow (sync):**
 ```
 AI: "Let me prove all the sorries in your theorem file."
 → prove_file(file_path="src/MyTheorem.lean")
@@ -32,7 +32,22 @@ AI: "Let me prove all the sorries in your theorem file."
 → {"status": "proved", "sorries_filled": 3, "sorries_total": 3, "output_path": "src/MyTheorem.solved.lean"}
 ```
 
-**Tool:** `prove_file(file_path)` — uses `auto_add_imports=True` internally
+**Flow (async for large files):**
+```
+AI: "This file has many theorems. I'll submit it and check back."
+→ prove_file(file_path="src/BigFile.lean", wait=False)
+→ {"status": "submitted", "project_id": "xyz-789", "sorries_total": 15}
+
+AI: [polls later]
+→ check_prove_file(project_id="xyz-789")
+→ {"status": "in_progress", "percent_complete": 60}
+
+AI: [polls again]
+→ check_prove_file(project_id="xyz-789")
+→ {"status": "proved", "percent_complete": 100, "sorries_filled": 15, "sorries_total": 15}
+```
+
+**Tools:** `prove_file(file_path)` with optional `wait=False`, `check_prove_file(project_id)` for polling
 
 **When to use:** Working within an existing Lake project where imports and dependencies matter.
 
@@ -50,11 +65,12 @@ AI: "This is a hard theorem. I'll submit it and check back."
 
 AI: [continues other work, then polls]
 → check_proof(project_id="abc-123")
-→ {"status": "in_progress", "project_id": "abc-123"}
+→ {"status": "in_progress", "percent_complete": 45, "project_id": "abc-123"}
+AI: "45% complete..."
 
 AI: [waits, polls again]
 → check_proof(project_id="abc-123")
-→ {"status": "proved", "code": "theorem hard : ... := by exact ..."}
+→ {"status": "proved", "percent_complete": 100, "code": "theorem hard : ... := by exact ..."}
 ```
 
 **Tools:** `prove(wait=False)` to submit, `check_proof(project_id)` to poll
@@ -92,7 +108,7 @@ AI: "This lemma is false! Here's a counterexample: ..."
 
 **Scenario:** User describes a mathematical statement in English. The AI needs to convert it to Lean 4 code.
 
-**Flow:**
+**Flow (basic):**
 ```
 User: "Prove that the sum of two even numbers is even"
 AI: "Let me formalize and prove that statement."
@@ -101,9 +117,22 @@ AI: "Let me formalize and prove that statement."
 AI: "Here's the formalized theorem with proof."
 ```
 
-**Tool:** `formalize(description, prove=True)`
+**Flow (with project context):**
+```
+User: "Prove that MyCustomType is commutative"
+AI: "I'll use your definitions file as context."
+→ formalize(
+    description="MyCustomType operation is commutative",
+    prove=True,
+    context_file="src/Definitions.lean"
+  )
+→ {"status": "proved", "lean_code": "import Definitions\n\ntheorem mytype_comm ..."}
+AI: "Formalized using your MyCustomType definition."
+```
 
-**When to use:** Converting informal math to Lean, or verifying natural language claims.
+**Tool:** `formalize(description, prove=True, context_file=...)`
+
+**When to use:** Converting informal math to Lean, or verifying natural language claims. Use `context_file` when your description references custom definitions from your project.
 
 ---
 
@@ -124,18 +153,6 @@ AI: "Your theorem uses definitions from other files. Let me include those."
 **Tool:** `prove(code, context_files=[...])` — manually specify context
 
 **When to use:** Ad-hoc Lean files without Lake project structure, or when specific context is needed.
-
----
-
-## Known Gaps
-
-These workflows are not yet fully supported:
-
-| Gap | Story Affected | Description |
-|-----|----------------|-------------|
-| `prove_file` has no async mode | Story 3 | Cannot poll long-running file proofs |
-| `check_proof` missing `percent_complete` | Story 3 | AI cannot report progress to user |
-| `formalize` cannot use Lean context | Story 5 | Cannot formalize using project's existing definitions |
 
 ---
 

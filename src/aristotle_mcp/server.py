@@ -9,6 +9,7 @@ from mcp.server import FastMCP
 
 from aristotle_mcp.tools import (
     check_proof,
+    check_prove_file,
     formalize,
     has_api_key,
     is_mock_mode,
@@ -67,12 +68,11 @@ async def check_proof_tool(project_id: str) -> str:
         project_id: The project ID returned from prove(wait=False)
 
     Returns:
-        JSON with current status. Possible statuses:
-        - "queued": Waiting to start
-        - "in_progress": Proof is being computed
-        - "proved": Complete - code field contains the proof
-        - "failed": Could not prove
-        - "error": API error
+        JSON with current status and progress. Fields:
+        - status: "queued" | "in_progress" | "proved" | "failed" | "error"
+        - percent_complete: 0-100 progress indicator
+        - code: The proof (when status is "proved")
+        - message: Human-readable status description
     """
     result = await check_proof(project_id=project_id)
     return json.dumps(result.to_dict(), indent=2)
@@ -82,6 +82,7 @@ async def check_proof_tool(project_id: str) -> str:
 async def prove_file_tool(
     file_path: str,
     output_path: str | None = None,
+    wait: bool = True,
 ) -> str:
     """Prove all `sorry` statements in a Lean file.
 
@@ -93,12 +94,39 @@ async def prove_file_tool(
     Args:
         file_path: Path to Lean file with `sorry` statements
         output_path: Where to write the solution (default: {file}.solved.lean)
+        wait: If True (default), block until complete. If False, submit
+              and return immediately with project_id for polling.
 
     Returns:
-        JSON with status (proved/partial/failed/error), output_path,
-        sorries_filled, sorries_total, and message
+        JSON with status, output_path, sorries_filled, sorries_total, and message.
+        If wait=False, returns status="submitted" with project_id for check_prove_file.
     """
-    result = await prove_file(file_path=file_path, output_path=output_path)
+    result = await prove_file(file_path=file_path, output_path=output_path, wait=wait)
+    return json.dumps(result.to_dict(), indent=2)
+
+
+@mcp.tool(name="check_prove_file")
+async def check_prove_file_tool(
+    project_id: str,
+    output_path: str | None = None,
+) -> str:
+    """Check the status of a previously submitted file proof.
+
+    Use this tool to poll for results after calling prove_file with wait=False.
+
+    Args:
+        project_id: The project ID returned from prove_file(wait=False)
+        output_path: Where to write the solution when complete (optional)
+
+    Returns:
+        JSON with current status and progress. Fields:
+        - status: "queued" | "in_progress" | "proved" | "partial" | "failed" | "error"
+        - percent_complete: 0-100 progress indicator
+        - sorries_filled/sorries_total: Proof progress counts (when complete)
+        - output_path: Path to solution file (when complete)
+        - message: Human-readable status description
+    """
+    result = await check_prove_file(project_id=project_id, output_path=output_path)
     return json.dumps(result.to_dict(), indent=2)
 
 
@@ -106,6 +134,7 @@ async def prove_file_tool(
 async def formalize_tool(
     description: str,
     prove: bool = False,
+    context_file: str | None = None,
 ) -> str:
     """Convert a natural language mathematical statement into Lean 4 code.
 
@@ -116,11 +145,14 @@ async def formalize_tool(
     Args:
         description: Natural language math statement or problem
         prove: Also attempt to prove the formalized statement (default: false)
+        context_file: Optional path to a Lean file providing definitions and
+                      context for the formalization. Use this when your description
+                      refers to custom types or definitions.
 
     Returns:
         JSON with status (formalized/proved/failed/error), lean_code, and message
     """
-    result = await formalize(description=description, prove=prove)
+    result = await formalize(description=description, prove=prove, context_file=context_file)
     return json.dumps(result.to_dict(), indent=2)
 
 

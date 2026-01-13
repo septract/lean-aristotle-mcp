@@ -11,6 +11,7 @@ from dotenv import load_dotenv
 
 from aristotle_mcp.mock import (
     mock_check_proof,
+    mock_check_prove_file,
     mock_formalize,
     mock_prove,
     mock_prove_file,
@@ -48,6 +49,7 @@ class ProveResult:
     code: str | None = None
     counterexample: str | None = None
     project_id: str | None = None
+    percent_complete: int | None = None
     message: str = ""
 
     def to_dict(self) -> dict[str, Any]:
@@ -59,6 +61,8 @@ class ProveResult:
             result["counterexample"] = self.counterexample
         if self.project_id is not None:
             result["project_id"] = self.project_id
+        if self.percent_complete is not None:
+            result["percent_complete"] = self.percent_complete
         return result
 
 
@@ -66,21 +70,29 @@ class ProveResult:
 class ProveFileResult:
     """Result from a prove_file operation."""
 
-    status: str  # proved | partial | failed | error
+    status: str  # proved | partial | failed | error | submitted | in_progress | queued
     output_path: str | None = None
     sorries_filled: int = 0
     sorries_total: int = 0
+    project_id: str | None = None
+    percent_complete: int | None = None
     message: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
-        return {
+        result: dict[str, Any] = {
             "status": self.status,
             "sorries_filled": self.sorries_filled,
             "sorries_total": self.sorries_total,
             "message": self.message,
-            **({"output_path": self.output_path} if self.output_path else {}),
         }
+        if self.output_path is not None:
+            result["output_path"] = self.output_path
+        if self.project_id is not None:
+            result["project_id"] = self.project_id
+        if self.percent_complete is not None:
+            result["percent_complete"] = self.percent_complete
+        return result
 
 
 @dataclass
@@ -228,6 +240,7 @@ async def check_proof(project_id: str) -> ProveResult:
             code=mock_result.code,
             counterexample=mock_result.counterexample,
             project_id=mock_result.project_id,
+            percent_complete=mock_result.percent_complete,
             message=mock_result.message,
         )
 
@@ -249,6 +262,9 @@ async def check_proof(project_id: str) -> ProveResult:
             project.status.name if hasattr(project.status, "name") else str(project.status).upper()
         )
 
+        # Get percent complete (may be None while queued)
+        pct = project.percent_complete
+
         # Map API status to our status
         if status_str == "COMPLETE":
             # Get the solution
@@ -264,6 +280,7 @@ async def check_proof(project_id: str) -> ProveResult:
                         status="proved",
                         code=solved_code,
                         project_id=project_id,
+                        percent_complete=100,
                         message="Proof completed successfully",
                     )
             finally:
@@ -273,6 +290,7 @@ async def check_proof(project_id: str) -> ProveResult:
             return ProveResult(
                 status="failed",
                 project_id=project_id,
+                percent_complete=pct,
                 message="Completed but no solution available",
             )
 
@@ -280,6 +298,7 @@ async def check_proof(project_id: str) -> ProveResult:
             return ProveResult(
                 status="queued",
                 project_id=project_id,
+                percent_complete=0,
                 message="Proof is queued, waiting to start",
             )
 
@@ -287,13 +306,15 @@ async def check_proof(project_id: str) -> ProveResult:
             return ProveResult(
                 status="in_progress",
                 project_id=project_id,
-                message="Proof is being computed",
+                percent_complete=pct,
+                message=f"Proof is being computed ({pct}% complete)",
             )
 
         elif status_str == "FAILED":
             return ProveResult(
                 status="failed",
                 project_id=project_id,
+                percent_complete=pct,
                 message="Proof failed",
             )
 
@@ -301,6 +322,7 @@ async def check_proof(project_id: str) -> ProveResult:
             return ProveResult(
                 status="in_progress",
                 project_id=project_id,
+                percent_complete=pct,
                 message=f"Status: {status_str}",
             )
 
@@ -315,6 +337,7 @@ async def check_proof(project_id: str) -> ProveResult:
 async def prove_file(
     file_path: str,
     output_path: str | None = None,
+    wait: bool = True,
 ) -> ProveFileResult:
     """
     Prove all sorry statements in a Lean file.
@@ -322,9 +345,12 @@ async def prove_file(
     Args:
         file_path: Path to Lean file with sorry statements
         output_path: Where to write solution (default: {file}.solved.lean)
+        wait: If True (default), block until complete. If False, return immediately
+              with a project_id that can be polled with check_prove_file.
 
     Returns:
-        ProveFileResult with status and counts
+        ProveFileResult with status and counts.
+        If wait=False, returns status="submitted" with project_id for polling.
     """
     if not os.path.exists(file_path):
         return ProveFileResult(
@@ -332,13 +358,20 @@ async def prove_file(
             message=f"File not found: {file_path}",
         )
 
+    # Count sorries in original file
+    with open(file_path) as f:
+        original = f.read()
+    original_sorries = original.count("sorry")
+
     if is_mock_mode():
-        mock_result = mock_prove_file(file_path, output_path)
+        mock_result = mock_prove_file(file_path, output_path, wait=wait)
         return ProveFileResult(
             status=mock_result.status,
             output_path=mock_result.output_path,
             sorries_filled=mock_result.sorries_filled,
             sorries_total=mock_result.sorries_total,
+            project_id=mock_result.project_id,
+            percent_complete=mock_result.percent_complete,
             message=mock_result.message,
         )
 
@@ -355,19 +388,27 @@ async def prove_file(
     try:
         from aristotlelib import Project
 
-        # Count sorries in original file first
-        with open(file_path) as f:
-            original = f.read()
-        original_sorries = original.count("sorry")
-
-        # Use the convenience method for file-based proving (async)
-        result_path = await Project.prove_from_file(
+        # Use the convenience method for file-based proving
+        result = await Project.prove_from_file(
             input_file_path=file_path,
             output_file_path=output_path,
             auto_add_imports=True,
-            wait_for_completion=True,
+            wait_for_completion=wait,
         )
 
+        # If not waiting, result is a Project object
+        if not wait:
+            # prove_from_file returns Project when wait_for_completion=False
+            project = result
+            return ProveFileResult(
+                status="submitted",
+                sorries_total=original_sorries,
+                project_id=str(project.project_id),
+                message="Proof submitted. Use check_prove_file to poll for results.",
+            )
+
+        # Waiting - result is the output path
+        result_path = result
         if result_path and os.path.exists(result_path):
             with open(result_path) as f:
                 solved = f.read()
@@ -386,6 +427,7 @@ async def prove_file(
                 output_path=str(result_path),
                 sorries_filled=filled,
                 sorries_total=original_sorries,
+                percent_complete=100,
                 message=f"Filled {filled} of {original_sorries} sorry statements",
             )
         else:
@@ -402,9 +444,125 @@ async def prove_file(
         )
 
 
+async def check_prove_file(project_id: str, output_path: str | None = None) -> ProveFileResult:
+    """
+    Check the status of a previously submitted file proof.
+
+    Args:
+        project_id: The project ID returned from prove_file(wait=False)
+        output_path: Where to write solution when complete (optional)
+
+    Returns:
+        ProveFileResult with current status. If complete, includes output_path and counts.
+    """
+    if is_mock_mode():
+        mock_result = mock_check_prove_file(project_id)
+        return ProveFileResult(
+            status=mock_result.status,
+            output_path=mock_result.output_path,
+            sorries_filled=mock_result.sorries_filled,
+            sorries_total=mock_result.sorries_total,
+            project_id=mock_result.project_id,
+            percent_complete=mock_result.percent_complete,
+            message=mock_result.message,
+        )
+
+    if not has_api_key():
+        return ProveFileResult(
+            status="error",
+            message="ARISTOTLE_API_KEY environment variable not set.",
+        )
+
+    try:
+        from aristotlelib import Project
+
+        # Load existing project
+        project = await Project.from_id(project_id)
+        await project.refresh()
+
+        # Get status and progress
+        status_str = (
+            project.status.name if hasattr(project.status, "name") else str(project.status).upper()
+        )
+        pct = project.percent_complete
+
+        if status_str == "COMPLETE":
+            # Get the solution
+            solution_path = await project.get_solution(output_path=output_path)
+
+            if solution_path and os.path.exists(solution_path):
+                with open(solution_path) as f:
+                    solved = f.read()
+
+                # Count sorries - we don't have original count, so just report what's left
+                remaining = solved.count("sorry")
+                # Estimate original based on description if available
+                sorries_total = 0  # Unknown without original file
+                sorries_filled = 0 if remaining > 0 else sorries_total
+
+                status = "proved" if remaining == 0 else "partial"
+
+                return ProveFileResult(
+                    status=status,
+                    output_path=str(solution_path),
+                    sorries_filled=sorries_filled,
+                    sorries_total=sorries_total,
+                    project_id=project_id,
+                    percent_complete=100,
+                    message="Proof completed",
+                )
+
+            return ProveFileResult(
+                status="failed",
+                project_id=project_id,
+                percent_complete=pct,
+                message="Completed but no solution available",
+            )
+
+        elif status_str in ("QUEUED", "NOT_STARTED"):
+            return ProveFileResult(
+                status="queued",
+                project_id=project_id,
+                percent_complete=0,
+                message="Proof is queued, waiting to start",
+            )
+
+        elif status_str == "IN_PROGRESS":
+            return ProveFileResult(
+                status="in_progress",
+                project_id=project_id,
+                percent_complete=pct,
+                message=f"Proof is being computed ({pct}% complete)",
+            )
+
+        elif status_str == "FAILED":
+            return ProveFileResult(
+                status="failed",
+                project_id=project_id,
+                percent_complete=pct,
+                message="Proof failed",
+            )
+
+        else:
+            return ProveFileResult(
+                status="in_progress",
+                project_id=project_id,
+                percent_complete=pct,
+                message=f"Status: {status_str}",
+            )
+
+    except Exception as e:
+        return ProveFileResult(
+            status="error",
+            project_id=project_id,
+            message=f"API error: {e!s}",
+        )
+
+
 async def formalize(
     description: str,
     prove: bool = False,
+    context_file: str | None = None,
 ) -> FormalizeResult:
     """
     Convert natural language math to Lean 4 code.
@@ -412,12 +570,14 @@ async def formalize(
     Args:
         description: Natural language math statement or problem
         prove: Whether to also prove the formalized statement
+        context_file: Optional path to a Lean file providing definitions and context
+                      for the formalization
 
     Returns:
         FormalizeResult with status and Lean code
     """
     if is_mock_mode():
-        mock_result = mock_formalize(description, prove)
+        mock_result = mock_formalize(description, prove, context_file)
         return FormalizeResult(
             status=mock_result.status,
             lean_code=mock_result.lean_code,
@@ -434,6 +594,13 @@ async def formalize(
             ),
         )
 
+    # Validate context file if provided
+    if context_file and not os.path.exists(context_file):
+        return FormalizeResult(
+            status="error",
+            message=f"Context file not found: {context_file}",
+        )
+
     try:
         from aristotlelib import Project, ProjectInputType
 
@@ -447,6 +614,7 @@ async def formalize(
             result_path = await Project.prove_from_file(
                 input_file_path=temp_path,
                 project_input_type=ProjectInputType.INFORMAL,
+                formal_input_context=context_file,
                 wait_for_completion=True,
             )
 

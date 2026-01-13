@@ -10,6 +10,7 @@ os.environ["ARISTOTLE_MOCK"] = "true"
 
 from aristotle_mcp.tools import (
     check_proof,
+    check_prove_file,
     formalize,
     is_mock_mode,
     prove,
@@ -84,6 +85,31 @@ async def test_prove_async_flow() -> None:
     assert result.code is not None
 
 
+async def test_check_proof_percent_complete() -> None:
+    """Test that check_proof returns percent_complete."""
+    code = "theorem pct_test : 1 + 1 = 2 := by sorry"
+
+    # Submit
+    result = await prove(code, wait=False)
+    project_id = result.project_id
+    assert project_id is not None
+
+    # First poll - queued, 0%
+    result = await check_proof(project_id)
+    assert result.status == "queued"
+    assert result.percent_complete == 0
+
+    # Second poll - in_progress, 50%
+    result = await check_proof(project_id)
+    assert result.status == "in_progress"
+    assert result.percent_complete == 50
+
+    # Third poll - proved, 100%
+    result = await check_proof(project_id)
+    assert result.status == "proved"
+    assert result.percent_complete == 100
+
+
 async def test_prove_file(example_lean_file: Path) -> None:
     """Test proving all sorries in a file."""
     result = await prove_file(str(example_lean_file))
@@ -92,6 +118,33 @@ async def test_prove_file(example_lean_file: Path) -> None:
     assert result.sorries_total > 0
     assert result.sorries_filled > 0
     assert result.message
+
+
+async def test_prove_file_async(example_lean_file: Path) -> None:
+    """Test async file proving with polling."""
+    # Submit without waiting
+    result = await prove_file(str(example_lean_file), wait=False)
+    assert result.status == "submitted"
+    assert result.project_id is not None
+    assert result.sorries_total > 0
+
+    project_id = result.project_id
+
+    # First poll - queued
+    result = await check_prove_file(project_id)
+    assert result.status == "queued"
+    assert result.percent_complete == 0
+
+    # Second poll - in_progress
+    result = await check_prove_file(project_id)
+    assert result.status == "in_progress"
+    assert result.percent_complete == 50
+
+    # Third poll - complete
+    result = await check_prove_file(project_id)
+    assert result.status in ("proved", "partial")
+    assert result.percent_complete == 100
+    assert result.sorries_filled > 0
 
 
 async def test_prove_file_not_found() -> None:
@@ -117,3 +170,16 @@ async def test_formalize_and_prove() -> None:
 
     assert result.status == "proved"
     assert result.lean_code is not None
+
+
+async def test_formalize_with_context(example_lean_file: Path) -> None:
+    """Test formalizing with a context file."""
+    result = await formalize(
+        "Prove something using the definitions",
+        context_file=str(example_lean_file),
+    )
+
+    assert result.status == "formalized"
+    assert result.lean_code is not None
+    assert "example" in result.lean_code.lower()  # Should reference the context file
+    assert "context" in result.message.lower()
