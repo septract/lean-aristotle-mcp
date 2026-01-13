@@ -397,20 +397,18 @@ async def prove_file(
         )
 
         # If not waiting, result is a Project object
-        if not wait:
-            # prove_from_file returns Project when wait_for_completion=False
-            project = result
+        # Use isinstance to narrow the type for mypy
+        if not wait and not isinstance(result, str):
             return ProveFileResult(
                 status="submitted",
                 sorries_total=original_sorries,
-                project_id=str(project.project_id),
+                project_id=str(result.project_id),
                 message="Proof submitted. Use check_prove_file to poll for results.",
             )
 
-        # Waiting - result is the output path
-        result_path = result
-        if result_path and os.path.exists(result_path):
-            with open(result_path) as f:
+        # Waiting - result is the output path (str)
+        if isinstance(result, str) and os.path.exists(result):
+            with open(result) as f:
                 solved = f.read()
             remaining_sorries = solved.count("sorry")
             filled = original_sorries - remaining_sorries
@@ -424,7 +422,7 @@ async def prove_file(
 
             return ProveFileResult(
                 status=status,
-                output_path=str(result_path),
+                output_path=result,
                 sorries_filled=filled,
                 sorries_total=original_sorries,
                 percent_complete=100,
