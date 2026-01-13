@@ -17,8 +17,8 @@ from aristotle_mcp.tools import (
     prove_file,
 )
 
-# Create the MCP server
-mcp = FastMCP(
+# Create the MCP server (no lifespan, so type parameter is None)
+mcp: FastMCP[None] = FastMCP(
     name="aristotle-mcp",
     instructions=(
         "Aristotle theorem prover for Lean 4. Use 'prove' to fill in sorry statements, "

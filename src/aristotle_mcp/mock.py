@@ -97,7 +97,7 @@ def mock_prove(
     _ = hint
 
     # Count sorries in the input
-    sorry_count = len(re.findall(r"\bsorry\b", code))
+    sorry_count = len(tuple(re.finditer(r"\bsorry\b", code)))
 
     if sorry_count == 0:
         return MockProveResult(
@@ -241,7 +241,7 @@ def mock_prove_file(
     with open(file_path) as f:
         content = f.read()
 
-    sorry_count = len(re.findall(r"\bsorry\b", content))
+    sorry_count = len(tuple(re.finditer(r"\bsorry\b", content)))
 
     if sorry_count == 0:
         return MockProveFileResult(

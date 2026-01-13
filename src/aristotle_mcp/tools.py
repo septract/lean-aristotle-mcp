@@ -5,7 +5,6 @@ from __future__ import annotations
 import os
 import tempfile
 from dataclasses import dataclass
-from typing import Any
 
 from dotenv import load_dotenv
 
@@ -16,6 +15,10 @@ from aristotle_mcp.mock import (
     mock_prove,
     mock_prove_file,
 )
+
+# Type for JSON-serializable result dictionaries
+ResultValue = str | int | None
+ResultDict = dict[str, ResultValue]
 
 # Track whether .env has been loaded
 _dotenv_loaded = False
@@ -52,9 +55,9 @@ class ProveResult:
     percent_complete: int | None = None
     message: str = ""
 
-    def to_dict(self) -> dict[str, Any]:
+    def to_dict(self) -> ResultDict:
         """Convert to dictionary for JSON serialization."""
-        result: dict[str, Any] = {"status": self.status, "message": self.message}
+        result: ResultDict = {"status": self.status, "message": self.message}
         if self.code is not None:
             result["code"] = self.code
         if self.counterexample is not None:
@@ -78,9 +81,9 @@ class ProveFileResult:
     percent_complete: int | None = None
     message: str = ""
 
-    def to_dict(self) -> dict[str, Any]:
+    def to_dict(self) -> ResultDict:
         """Convert to dictionary for JSON serialization."""
-        result: dict[str, Any] = {
+        result: ResultDict = {
             "status": self.status,
             "sorries_filled": self.sorries_filled,
             "sorries_total": self.sorries_total,
@@ -103,9 +106,9 @@ class FormalizeResult:
     lean_code: str | None = None
     message: str = ""
 
-    def to_dict(self) -> dict[str, Any]:
+    def to_dict(self) -> ResultDict:
         """Convert to dictionary for JSON serialization."""
-        result: dict[str, Any] = {"status": self.status, "message": self.message}
+        result: ResultDict = {"status": self.status, "message": self.message}
         if self.lean_code is not None:
             result["lean_code"] = self.lean_code
         return result

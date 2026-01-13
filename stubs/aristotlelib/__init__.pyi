@@ -1,7 +1,7 @@
 """Type stubs for aristotlelib - Harmonic's Aristotle theorem prover SDK."""
 
 from enum import Enum
-from typing import Any, Literal, overload
+from typing import Literal, overload
 from uuid import UUID
 
 class ProjectStatus(Enum):
@@ -58,7 +58,7 @@ class Project:
         wait_for_completion: Literal[True] = ...,
         project_input_type: ProjectInputType | None = ...,
         formal_input_context: str | None = ...,
-        **kwargs: Any,
+        **kwargs: object,
     ) -> str:
         """Prove a Lean file, waiting for completion. Returns the output path."""
         ...
@@ -74,7 +74,7 @@ class Project:
         wait_for_completion: Literal[False],
         project_input_type: ProjectInputType | None = ...,
         formal_input_context: str | None = ...,
-        **kwargs: Any,
+        **kwargs: object,
     ) -> Project:
         """Prove a Lean file without waiting. Returns the Project for polling."""
         ...
@@ -90,7 +90,7 @@ class Project:
         wait_for_completion: bool,
         project_input_type: ProjectInputType | None = ...,
         formal_input_context: str | None = ...,
-        **kwargs: Any,
+        **kwargs: object,
     ) -> str | Project:
         """Prove a Lean file. Returns path or Project depending on wait_for_completion."""
         ...
