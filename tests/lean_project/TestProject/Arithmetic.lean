@@ -2,6 +2,7 @@
 Arithmetic theorems to prove.
 -/
 import TestProject.Basic
+import Mathlib.Tactic
 
 /-- Zero is even -/
 theorem zero_even : even 0 := by
