@@ -11,7 +11,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-api = ["aristotlelib>=0.6.0"]
+api = ["aristotlelib~=0.6.0"]  # Pin to 0.6.x; 0.x libs may break on minor bumps
 dev = [
     "mypy>=1.0.0",
     "ruff>=0.1.0",

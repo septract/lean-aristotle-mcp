@@ -2,17 +2,22 @@
 
 from __future__ import annotations
 
+import os
 import re
 import uuid
-from dataclasses import dataclass
 from typing import TypedDict
 
+from aristotle_mcp.models import FormalizeResult, ProveFileResult, ProveResult
+
+# Regex for counting sorry statements (word boundary to avoid matching "sorryExample")
+_SORRY_PATTERN = re.compile(r"\bsorry\b")
+
 # In-memory store for mock async proofs
-_mock_projects: dict[str, MockProjectData] = {}
-_mock_file_projects: dict[str, MockFileProjectData] = {}
+_mock_projects: dict[str, _MockProjectData] = {}
+_mock_file_projects: dict[str, _MockFileProjectData] = {}
 
 
-class MockProjectData(TypedDict):
+class _MockProjectData(TypedDict):
     """Internal storage for mock proof jobs."""
 
     status: str
@@ -22,7 +27,7 @@ class MockProjectData(TypedDict):
     poll_count: int
 
 
-class MockFileProjectData(TypedDict):
+class _MockFileProjectData(TypedDict):
     """Internal storage for mock file proof jobs."""
 
     status: str
@@ -33,48 +38,13 @@ class MockFileProjectData(TypedDict):
     poll_count: int
 
 
-@dataclass
-class MockProveResult:
-    """Result from mock prove operation."""
-
-    status: str
-    code: str | None = None
-    counterexample: str | None = None
-    project_id: str | None = None
-    percent_complete: int | None = None
-    message: str = ""
-
-
-@dataclass
-class MockProveFileResult:
-    """Result from mock prove_file operation."""
-
-    status: str
-    output_path: str | None = None
-    sorries_filled: int = 0
-    sorries_total: int = 0
-    project_id: str | None = None
-    percent_complete: int | None = None
-    message: str = ""
-
-
-@dataclass
-class MockFormalizeResult:
-    """Result from mock formalize operation."""
-
-    status: str
-    lean_code: str | None = None
-    message: str = ""
-
-
 def mock_prove(
     code: str,
     context_files: list[str] | None = None,
     hint: str | None = None,
     wait: bool = True,
-) -> MockProveResult:
-    """
-    Mock implementation of prove.
+) -> ProveResult:
+    """Mock implementation of prove.
 
     Provides realistic responses based on the input:
     - If code contains 'false_theorem' or 'bad_lemma': returns counterexample
@@ -90,17 +60,18 @@ def mock_prove(
         wait: If True, return result immediately. If False, return project_id for polling.
 
     Returns:
-        MockProveResult with status and optional code/counterexample
+        ProveResult with status and optional code/counterexample
     """
     # Silence unused argument warnings - these are part of the API
     _ = context_files
     _ = hint
 
     # Count sorries in the input
-    sorry_count = len(tuple(re.finditer(r"\bsorry\b", code)))
+    matches: list[str] = _SORRY_PATTERN.findall(code)
+    sorry_count = len(matches)
 
     if sorry_count == 0:
-        return MockProveResult(
+        return ProveResult(
             status="error", message="No 'sorry' statements found in the provided code"
         )
 
@@ -126,8 +97,7 @@ def mock_prove(
         )
     else:
         final_status = "proved"
-        final_code = re.sub(
-            r"\bsorry\b",
+        final_code = _SORRY_PATTERN.sub(
             "simp [add_comm, add_assoc, mul_comm]  -- filled by Aristotle",
             code,
         )
@@ -139,21 +109,21 @@ def mock_prove(
 
     # If not waiting, store the job and return immediately
     if not wait:
-        _mock_projects[project_id] = MockProjectData(
+        _mock_projects[project_id] = _MockProjectData(
             status=final_status,
             code=final_code,
             counterexample=final_counterexample,
             message=final_message,
             poll_count=0,
         )
-        return MockProveResult(
+        return ProveResult(
             status="submitted",
             project_id=project_id,
             message="Proof submitted. Use check_proof to poll for results.",
         )
 
     # Waiting - return the final result immediately
-    return MockProveResult(
+    return ProveResult(
         status=final_status,
         code=final_code,
         counterexample=final_counterexample,
@@ -162,9 +132,8 @@ def mock_prove(
     )
 
 
-def mock_check_proof(project_id: str) -> MockProveResult:
-    """
-    Mock implementation of check_proof.
+def mock_check_proof(project_id: str) -> ProveResult:
+    """Mock implementation of check_proof.
 
     Simulates async polling:
     - First call: returns "queued"
@@ -175,10 +144,10 @@ def mock_check_proof(project_id: str) -> MockProveResult:
         project_id: The mock project ID to check
 
     Returns:
-        MockProveResult with current status
+        ProveResult with current status
     """
     if project_id not in _mock_projects:
-        return MockProveResult(
+        return ProveResult(
             status="error",
             project_id=project_id,
             message=f"Unknown project ID: {project_id}",
@@ -189,14 +158,14 @@ def mock_check_proof(project_id: str) -> MockProveResult:
 
     # Simulate progression through statuses
     if project["poll_count"] == 1:
-        return MockProveResult(
+        return ProveResult(
             status="queued",
             project_id=project_id,
             percent_complete=0,
             message="Proof is queued, waiting to start",
         )
     elif project["poll_count"] == 2:
-        return MockProveResult(
+        return ProveResult(
             status="in_progress",
             project_id=project_id,
             percent_complete=50,
@@ -204,7 +173,7 @@ def mock_check_proof(project_id: str) -> MockProveResult:
         )
     else:
         # Return final result
-        return MockProveResult(
+        return ProveResult(
             status=project["status"],
             code=project["code"],
             counterexample=project["counterexample"],
@@ -218,9 +187,8 @@ def mock_prove_file(
     file_path: str,
     output_path: str | None = None,
     wait: bool = True,
-) -> MockProveFileResult:
-    """
-    Mock implementation of prove_file.
+) -> ProveFileResult:
+    """Mock implementation of prove_file.
 
     Returns a simulated result based on the file path.
 
@@ -230,21 +198,20 @@ def mock_prove_file(
         wait: If True, return result immediately. If False, return project_id for polling.
 
     Returns:
-        MockProveFileResult with status and counts
+        ProveFileResult with status and counts
     """
-    import os
-
     if not os.path.exists(file_path):
-        return MockProveFileResult(status="error", message=f"File not found: {file_path}")
+        return ProveFileResult(status="error", message=f"File not found: {file_path}")
 
     # Read the file to count sorries
     with open(file_path) as f:
         content = f.read()
 
-    sorry_count = len(tuple(re.finditer(r"\bsorry\b", content)))
+    content_matches: list[str] = _SORRY_PATTERN.findall(content)
+    sorry_count = len(content_matches)
 
     if sorry_count == 0:
-        return MockProveFileResult(
+        return ProveFileResult(
             status="error", sorries_total=0, message="No 'sorry' statements found in the file"
         )
 
@@ -255,7 +222,7 @@ def mock_prove_file(
 
     # Check if output would overwrite existing file
     if os.path.exists(output_path):
-        return MockProveFileResult(
+        return ProveFileResult(
             status="error",
             message=f"Output file already exists: {output_path}",
         )
@@ -275,7 +242,7 @@ def mock_prove_file(
 
     # If not waiting, store the job and return immediately
     if not wait:
-        _mock_file_projects[project_id] = MockFileProjectData(
+        _mock_file_projects[project_id] = _MockFileProjectData(
             status=final_status,
             output_path=output_path,
             sorries_filled=filled,
@@ -283,7 +250,7 @@ def mock_prove_file(
             message=final_message,
             poll_count=0,
         )
-        return MockProveFileResult(
+        return ProveFileResult(
             status="submitted",
             sorries_total=sorry_count,
             project_id=project_id,
@@ -291,7 +258,7 @@ def mock_prove_file(
         )
 
     # Waiting - return final result
-    return MockProveFileResult(
+    return ProveFileResult(
         status=final_status,
         output_path=output_path,
         sorries_filled=filled,
@@ -302,9 +269,8 @@ def mock_prove_file(
     )
 
 
-def mock_check_prove_file(project_id: str) -> MockProveFileResult:
-    """
-    Mock implementation of check_prove_file.
+def mock_check_prove_file(project_id: str) -> ProveFileResult:
+    """Mock implementation of check_prove_file.
 
     Simulates async polling for file proofs:
     - First call: returns "queued"
@@ -315,10 +281,10 @@ def mock_check_prove_file(project_id: str) -> MockProveFileResult:
         project_id: The mock project ID to check
 
     Returns:
-        MockProveFileResult with current status
+        ProveFileResult with current status
     """
     if project_id not in _mock_file_projects:
-        return MockProveFileResult(
+        return ProveFileResult(
             status="error",
             project_id=project_id,
             message=f"Unknown project ID: {project_id}",
@@ -329,7 +295,7 @@ def mock_check_prove_file(project_id: str) -> MockProveFileResult:
 
     # Simulate progression through statuses
     if project["poll_count"] == 1:
-        return MockProveFileResult(
+        return ProveFileResult(
             status="queued",
             sorries_total=project["sorries_total"],
             project_id=project_id,
@@ -337,7 +303,7 @@ def mock_check_prove_file(project_id: str) -> MockProveFileResult:
             message="Proof is queued, waiting to start",
         )
     elif project["poll_count"] == 2:
-        return MockProveFileResult(
+        return ProveFileResult(
             status="in_progress",
             sorries_total=project["sorries_total"],
             project_id=project_id,
@@ -346,7 +312,7 @@ def mock_check_prove_file(project_id: str) -> MockProveFileResult:
         )
     else:
         # Return final result
-        return MockProveFileResult(
+        return ProveFileResult(
             status=project["status"],
             output_path=project["output_path"],
             sorries_filled=project["sorries_filled"],
@@ -361,9 +327,8 @@ def mock_formalize(
     description: str,
     prove: bool = False,
     context_file: str | None = None,
-) -> MockFormalizeResult:
-    """
-    Mock implementation of formalize.
+) -> FormalizeResult:
+    """Mock implementation of formalize.
 
     Generates plausible Lean code from natural language descriptions.
 
@@ -373,15 +338,13 @@ def mock_formalize(
         context_file: Optional Lean file providing context definitions
 
     Returns:
-        MockFormalizeResult with status and Lean code
+        FormalizeResult with status and Lean code
     """
     description_lower = description.lower()
 
     # Add context import if provided
     context_header = ""
     if context_file:
-        import os
-
         context_name = os.path.splitext(os.path.basename(context_file))[0]
         context_header = f"-- Using context from: {context_file}\nimport {context_name}\n\n"
 
@@ -425,4 +388,4 @@ theorem statement : True := by
     if context_file:
         message += f" (using context from {context_file})"
 
-    return MockFormalizeResult(status=status, lean_code=lean_code, message=message)
+    return FormalizeResult(status=status, lean_code=lean_code, message=message)

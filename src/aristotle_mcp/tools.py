@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import re
 import tempfile
-from dataclasses import dataclass
+import time
 
 from dotenv import load_dotenv
 
@@ -16,26 +16,56 @@ from aristotle_mcp.mock import (
     mock_prove,
     mock_prove_file,
 )
+from aristotle_mcp.models import (
+    FormalizeResult,
+    ProveFileResult,
+    ProveResult,
+    ResultDict,
+    ResultValue,
+)
+
+# Re-export types for backwards compatibility
+__all__ = [
+    "ResultDict",
+    "ResultValue",
+    "ProveResult",
+    "ProveFileResult",
+    "FormalizeResult",
+    "is_mock_mode",
+    "has_api_key",
+    "prove",
+    "check_proof",
+    "prove_file",
+    "check_prove_file",
+    "formalize",
+]
 
 # Regex for counting sorry statements (word boundary to avoid matching "sorryExample")
 _SORRY_PATTERN = re.compile(r"\bsorry\b")
+
+# Track whether .env has been loaded
+_dotenv_loaded = False
+
+# Metadata store for async proof jobs (persists across polls within server lifetime)
+# Maps project_id -> metadata dict with timestamp for cleanup
+_async_job_metadata: dict[str, dict[str, str | int | float]] = {}
+
+# Cleanup jobs older than 1 hour
+_METADATA_TTL_SECONDS = 3600
+
+# Helpful error message for missing API key
+_API_KEY_ERROR = (
+    "ARISTOTLE_API_KEY environment variable not set. "
+    "Get your API key at https://aristotle.harmonic.fun/ and set it with: "
+    "export ARISTOTLE_API_KEY=your-key-here. "
+    "For testing without an API key, set ARISTOTLE_MOCK=true."
+)
 
 
 def _count_sorries(text: str) -> int:
     """Count sorry statements in text using word boundary matching."""
     matches: list[str] = _SORRY_PATTERN.findall(text)
     return len(matches)
-
-# Type for JSON-serializable result dictionaries
-ResultValue = str | int | None
-ResultDict = dict[str, ResultValue]
-
-# Track whether .env has been loaded
-_dotenv_loaded = False
-
-# Metadata store for async proof jobs (persists across polls within server lifetime)
-# Maps project_id -> metadata dict
-_async_job_metadata: dict[str, dict[str, str | int]] = {}
 
 
 def _find_unique_path(path: str, max_attempts: int = 1000) -> str:
@@ -71,6 +101,43 @@ def _ensure_dotenv() -> None:
     if not _dotenv_loaded:
         load_dotenv()
         _dotenv_loaded = True
+
+
+def _cleanup_stale_metadata() -> None:
+    """Remove metadata entries older than TTL to prevent memory leaks."""
+    now = time.time()
+    stale_ids = [
+        pid for pid, meta in _async_job_metadata.items()
+        if now - float(meta.get("timestamp", 0)) > _METADATA_TTL_SECONDS
+    ]
+    for pid in stale_ids:
+        _async_job_metadata.pop(pid, None)
+
+
+def _map_api_status(status_str: str, percent_complete: int | None) -> tuple[str, str]:
+    """Map aristotlelib API status to our status and message.
+
+    Args:
+        status_str: Status string from the API (e.g., "COMPLETE", "QUEUED")
+        percent_complete: Percent complete from the API
+
+    Returns:
+        Tuple of (status, message) for our result types
+    """
+    pct = percent_complete or 0
+
+    if status_str == "COMPLETE":
+        return "complete", "Proof completed"
+    elif status_str in ("QUEUED", "NOT_STARTED"):
+        return "queued", "Proof is queued, waiting to start"
+    elif status_str == "IN_PROGRESS":
+        return "in_progress", f"Proof is being computed ({pct}% complete)"
+    elif status_str == "PENDING_RETRY":
+        return "in_progress", "Proof is pending retry"
+    elif status_str == "FAILED":
+        return "failed", "Proof failed"
+    else:
+        return "in_progress", f"Status: {status_str}"
 
 
 def _analyze_solution_file(
@@ -139,84 +206,13 @@ def has_api_key() -> bool:
     return bool(os.environ.get("ARISTOTLE_API_KEY"))
 
 
-@dataclass
-class ProveResult:
-    """Result from a prove operation."""
-
-    status: str  # proved | counterexample | failed | error | submitted | in_progress | queued
-    code: str | None = None
-    counterexample: str | None = None
-    project_id: str | None = None
-    percent_complete: int | None = None
-    message: str = ""
-
-    def to_dict(self) -> ResultDict:
-        """Convert to dictionary for JSON serialization."""
-        result: ResultDict = {"status": self.status, "message": self.message}
-        if self.code is not None:
-            result["code"] = self.code
-        if self.counterexample is not None:
-            result["counterexample"] = self.counterexample
-        if self.project_id is not None:
-            result["project_id"] = self.project_id
-        if self.percent_complete is not None:
-            result["percent_complete"] = self.percent_complete
-        return result
-
-
-@dataclass
-class ProveFileResult:
-    """Result from a prove_file operation."""
-
-    status: str  # proved | partial | failed | error | submitted | in_progress | queued
-    output_path: str | None = None
-    sorries_filled: int = 0
-    sorries_total: int = 0
-    project_id: str | None = None
-    percent_complete: int | None = None
-    message: str = ""
-
-    def to_dict(self) -> ResultDict:
-        """Convert to dictionary for JSON serialization."""
-        result: ResultDict = {
-            "status": self.status,
-            "sorries_filled": self.sorries_filled,
-            "sorries_total": self.sorries_total,
-            "message": self.message,
-        }
-        if self.output_path is not None:
-            result["output_path"] = self.output_path
-        if self.project_id is not None:
-            result["project_id"] = self.project_id
-        if self.percent_complete is not None:
-            result["percent_complete"] = self.percent_complete
-        return result
-
-
-@dataclass
-class FormalizeResult:
-    """Result from a formalize operation."""
-
-    status: str  # formalized | proved | failed | error
-    lean_code: str | None = None
-    message: str = ""
-
-    def to_dict(self) -> ResultDict:
-        """Convert to dictionary for JSON serialization."""
-        result: ResultDict = {"status": self.status, "message": self.message}
-        if self.lean_code is not None:
-            result["lean_code"] = self.lean_code
-        return result
-
-
 async def prove(
     code: str,
     context_files: list[str] | None = None,
     hint: str | None = None,
     wait: bool = True,
 ) -> ProveResult:
-    """
-    Attempt to prove Lean code containing sorry statements.
+    """Attempt to prove Lean code containing sorry statements.
 
     Args:
         code: Lean 4 code containing `sorry` statements
@@ -230,25 +226,11 @@ async def prove(
         If wait=False, returns status="submitted" with project_id for polling.
     """
     if is_mock_mode():
-        mock_result = mock_prove(code, context_files, hint, wait=wait)
-        return ProveResult(
-            status=mock_result.status,
-            code=mock_result.code,
-            counterexample=mock_result.counterexample,
-            project_id=mock_result.project_id,
-            percent_complete=mock_result.percent_complete,
-            message=mock_result.message,
-        )
+        return mock_prove(code, context_files, hint, wait=wait)
 
     # Real API implementation
     if not has_api_key():
-        return ProveResult(
-            status="error",
-            message=(
-                "ARISTOTLE_API_KEY environment variable not set. "
-                "Set ARISTOTLE_MOCK=true for testing."
-            ),
-        )
+        return ProveResult(status="error", message=_API_KEY_ERROR)
 
     # Validate context files exist before making API calls
     if context_files:
@@ -332,8 +314,7 @@ async def prove(
 
 
 async def check_proof(project_id: str) -> ProveResult:
-    """
-    Check the status of a previously submitted proof.
+    """Check the status of a previously submitted proof.
 
     Args:
         project_id: The project ID returned from prove(wait=False)
@@ -342,21 +323,10 @@ async def check_proof(project_id: str) -> ProveResult:
         ProveResult with current status. If complete, includes the proof code.
     """
     if is_mock_mode():
-        mock_result = mock_check_proof(project_id)
-        return ProveResult(
-            status=mock_result.status,
-            code=mock_result.code,
-            counterexample=mock_result.counterexample,
-            project_id=mock_result.project_id,
-            percent_complete=mock_result.percent_complete,
-            message=mock_result.message,
-        )
+        return mock_check_proof(project_id)
 
     if not has_api_key():
-        return ProveResult(
-            status="error",
-            message="ARISTOTLE_API_KEY environment variable not set.",
-        )
+        return ProveResult(status="error", message=_API_KEY_ERROR)
 
     try:
         from aristotlelib import Project
@@ -369,12 +339,12 @@ async def check_proof(project_id: str) -> ProveResult:
         status_str = (
             project.status.name if hasattr(project.status, "name") else str(project.status).upper()
         )
-
-        # Get percent complete (may be None while queued)
         pct = project.percent_complete
 
         # Map API status to our status
-        if status_str == "COMPLETE":
+        our_status, message = _map_api_status(status_str, pct)
+
+        if our_status == "complete":
             # Get the solution
             with tempfile.NamedTemporaryFile(mode="w", suffix=".lean", delete=False) as f:
                 output_path = f.name
@@ -402,45 +372,12 @@ async def check_proof(project_id: str) -> ProveResult:
                 message="Completed but no solution available",
             )
 
-        elif status_str in ("QUEUED", "NOT_STARTED"):
-            return ProveResult(
-                status="queued",
-                project_id=project_id,
-                percent_complete=0,
-                message="Proof is queued, waiting to start",
-            )
-
-        elif status_str == "IN_PROGRESS":
-            return ProveResult(
-                status="in_progress",
-                project_id=project_id,
-                percent_complete=pct,
-                message=f"Proof is being computed ({pct}% complete)",
-            )
-
-        elif status_str == "PENDING_RETRY":
-            return ProveResult(
-                status="in_progress",
-                project_id=project_id,
-                percent_complete=pct,
-                message="Proof is pending retry",
-            )
-
-        elif status_str == "FAILED":
-            return ProveResult(
-                status="failed",
-                project_id=project_id,
-                percent_complete=pct,
-                message="Proof failed",
-            )
-
-        else:
-            return ProveResult(
-                status="in_progress",
-                project_id=project_id,
-                percent_complete=pct,
-                message=f"Status: {status_str}",
-            )
+        return ProveResult(
+            status=our_status,
+            project_id=project_id,
+            percent_complete=pct if our_status != "queued" else 0,
+            message=message,
+        )
 
     except Exception as e:
         return ProveResult(
@@ -455,8 +392,7 @@ async def prove_file(
     output_path: str | None = None,
     wait: bool = True,
 ) -> ProveFileResult:
-    """
-    Prove all sorry statements in a Lean file.
+    """Prove all sorry statements in a Lean file.
 
     Args:
         file_path: Path to Lean file with sorry statements
@@ -493,26 +429,11 @@ async def prove_file(
     original_sorries = _count_sorries(original)
 
     if is_mock_mode():
-        mock_result = mock_prove_file(file_path, output_path, wait=wait)
-        return ProveFileResult(
-            status=mock_result.status,
-            output_path=mock_result.output_path,
-            sorries_filled=mock_result.sorries_filled,
-            sorries_total=mock_result.sorries_total,
-            project_id=mock_result.project_id,
-            percent_complete=mock_result.percent_complete,
-            message=mock_result.message,
-        )
+        return mock_prove_file(file_path, output_path, wait=wait)
 
     # Real API implementation
     if not has_api_key():
-        return ProveFileResult(
-            status="error",
-            message=(
-                "ARISTOTLE_API_KEY environment variable not set. "
-                "Set ARISTOTLE_MOCK=true for testing."
-            ),
-        )
+        return ProveFileResult(status="error", message=_API_KEY_ERROR)
 
     try:
         from aristotlelib import Project, ProjectStatus
@@ -528,7 +449,10 @@ async def prove_file(
 
         # For async mode, we need to find the project_id for polling
         if not wait:
-            # List recent projects to find the one we just created
+            # NOTE: This is a potential race condition if multiple proofs are submitted
+            # simultaneously. The aristotlelib API doesn't return project_id from
+            # prove_from_file, so we have to find it by listing recent projects.
+            # This should be fixed upstream in aristotlelib.
             projects, _ = await Project.list_projects(
                 limit=5,
                 status=[ProjectStatus.QUEUED, ProjectStatus.IN_PROGRESS, ProjectStatus.NOT_STARTED],
@@ -544,11 +468,15 @@ async def prove_file(
             project = projects[0]
             project_id = str(project.project_id)
 
+            # Cleanup stale metadata before adding new entry
+            _cleanup_stale_metadata()
+
             # Store metadata for retrieval when polling
             _async_job_metadata[project_id] = {
                 "file_path": os.path.abspath(file_path),
                 "output_path": actual_output_path,
                 "sorries_total": original_sorries,
+                "timestamp": time.time(),
             }
 
             return ProveFileResult(
@@ -570,8 +498,7 @@ async def prove_file(
 
 
 async def check_prove_file(project_id: str, output_path: str | None = None) -> ProveFileResult:
-    """
-    Check the status of a previously submitted file proof.
+    """Check the status of a previously submitted file proof.
 
     Args:
         project_id: The project ID returned from prove_file(wait=False)
@@ -581,22 +508,10 @@ async def check_prove_file(project_id: str, output_path: str | None = None) -> P
         ProveFileResult with current status. If complete, includes output_path and counts.
     """
     if is_mock_mode():
-        mock_result = mock_check_prove_file(project_id)
-        return ProveFileResult(
-            status=mock_result.status,
-            output_path=mock_result.output_path,
-            sorries_filled=mock_result.sorries_filled,
-            sorries_total=mock_result.sorries_total,
-            project_id=mock_result.project_id,
-            percent_complete=mock_result.percent_complete,
-            message=mock_result.message,
-        )
+        return mock_check_prove_file(project_id)
 
     if not has_api_key():
-        return ProveFileResult(
-            status="error",
-            message="ARISTOTLE_API_KEY environment variable not set.",
-        )
+        return ProveFileResult(status="error", message=_API_KEY_ERROR)
 
     # Retrieve stored metadata if available
     metadata = _async_job_metadata.get(project_id, {})
@@ -620,7 +535,10 @@ async def check_prove_file(project_id: str, output_path: str | None = None) -> P
         )
         pct = project.percent_complete
 
-        if status_str == "COMPLETE":
+        # Map API status to our status
+        our_status, message = _map_api_status(status_str, pct)
+
+        if our_status == "complete":
             # Find a unique path to avoid overwriting existing files
             safe_output_path = _find_unique_path(output_path) if output_path else None
 
@@ -633,47 +551,16 @@ async def check_prove_file(project_id: str, output_path: str | None = None) -> P
             sorries_total = int(stored_sorries_total) if stored_sorries_total else 0
             return _analyze_solution_file(str(solution_path), sorries_total, project_id)
 
-        elif status_str in ("QUEUED", "NOT_STARTED"):
-            return ProveFileResult(
-                status="queued",
-                project_id=project_id,
-                percent_complete=0,
-                message="Proof is queued, waiting to start",
-            )
-
-        elif status_str == "IN_PROGRESS":
-            return ProveFileResult(
-                status="in_progress",
-                project_id=project_id,
-                percent_complete=pct,
-                message=f"Proof is being computed ({pct}% complete)",
-            )
-
-        elif status_str == "PENDING_RETRY":
-            return ProveFileResult(
-                status="in_progress",
-                project_id=project_id,
-                percent_complete=pct,
-                message="Proof is pending retry",
-            )
-
-        elif status_str == "FAILED":
+        elif our_status == "failed":
             # Clean up metadata for failed jobs
             _async_job_metadata.pop(project_id, None)
-            return ProveFileResult(
-                status="failed",
-                project_id=project_id,
-                percent_complete=pct,
-                message="Proof failed",
-            )
 
-        else:
-            return ProveFileResult(
-                status="in_progress",
-                project_id=project_id,
-                percent_complete=pct,
-                message=f"Status: {status_str}",
-            )
+        return ProveFileResult(
+            status=our_status,
+            project_id=project_id,
+            percent_complete=pct if our_status != "queued" else 0,
+            message=message,
+        )
 
     except Exception as e:
         return ProveFileResult(
@@ -688,8 +575,7 @@ async def formalize(
     prove: bool = False,
     context_file: str | None = None,
 ) -> FormalizeResult:
-    """
-    Convert natural language math to Lean 4 code.
+    """Convert natural language math to Lean 4 code.
 
     Args:
         description: Natural language math statement or problem
@@ -701,22 +587,11 @@ async def formalize(
         FormalizeResult with status and Lean code
     """
     if is_mock_mode():
-        mock_result = mock_formalize(description, prove, context_file)
-        return FormalizeResult(
-            status=mock_result.status,
-            lean_code=mock_result.lean_code,
-            message=mock_result.message,
-        )
+        return mock_formalize(description, prove, context_file)
 
     # Real API implementation
     if not has_api_key():
-        return FormalizeResult(
-            status="error",
-            message=(
-                "ARISTOTLE_API_KEY environment variable not set. "
-                "Set ARISTOTLE_MOCK=true for testing."
-            ),
-        )
+        return FormalizeResult(status="error", message=_API_KEY_ERROR)
 
     # Validate context file if provided
     if context_file and not os.path.exists(context_file):

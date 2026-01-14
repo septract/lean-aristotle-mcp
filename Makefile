@@ -101,7 +101,7 @@ type-check: ## Run type checker (mypy)
 test: test-mock ## Run default tests (mock mode only)
 
 test-mock: ## Run mock mode tests (no API key needed)
-	ARISTOTLE_MOCK=true $(PYTEST) $(TEST_DIR)/test_mock.py -v
+	ARISTOTLE_MOCK=true $(PYTEST) $(TEST_DIR) -v --ignore=$(TEST_DIR)/test_api.py --ignore=$(TEST_DIR)/test_api_tools.py
 
 test-api: ## Run live API tests (requires ARISTOTLE_API_KEY)
 	@if [ -z "$$ARISTOTLE_API_KEY" ]; then \

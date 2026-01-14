@@ -7,8 +7,8 @@ import sys
 
 from mcp.server import FastMCP
 
+from aristotle_mcp.models import ResultDict
 from aristotle_mcp.tools import (
-    ResultDict,
     check_proof,
     check_prove_file,
     formalize,
@@ -178,7 +178,10 @@ async def get_status() -> str:
     ready = mock_mode or api_key_configured
 
     if not ready:
-        message = "Set ARISTOTLE_API_KEY or ARISTOTLE_MOCK=true"
+        message = (
+            "Not configured. Get your API key at https://aristotle.harmonic.fun/ "
+            "and set ARISTOTLE_API_KEY, or set ARISTOTLE_MOCK=true for testing."
+        )
     elif mock_mode:
         message = "Running in mock mode (no API calls)"
     else:
