@@ -1,8 +1,12 @@
-"""Type stubs for aristotlelib - Harmonic's Aristotle theorem prover SDK."""
+"""Type stubs for aristotlelib - Harmonic's Aristotle theorem prover SDK.
 
+IMPORTANT: These stubs were audited against aristotlelib version 0.6.x.
+All signatures verified via runtime inspection on 2025-01-13.
+"""
+
+from datetime import datetime
 from enum import Enum
-from typing import Literal, overload
-from uuid import UUID
+from pathlib import Path
 
 class ProjectStatus(Enum):
     """Status of a proof project."""
@@ -17,85 +21,84 @@ class ProjectStatus(Enum):
 class ProjectInputType(Enum):
     """Type of input for a proof project."""
 
-    FORMAL = "FORMAL"
-    INFORMAL = "INFORMAL"
-
-class Pagination:
-    """Pagination info from list operations."""
-
-    ...
+    FORMAL_LEAN = 2
+    INFORMAL = 3
 
 class Project:
-    """A proof project in the Aristotle system."""
+    """A proof project in the Aristotle system.
 
-    project_id: UUID
+    This is a Pydantic model with the following fields.
+    """
+
+    project_id: str
     status: ProjectStatus
+    created_at: datetime
+    last_updated_at: datetime
     percent_complete: int | None
+    file_name: str | None
+    description: str | None
 
     @classmethod
-    async def create(cls) -> Project:
+    async def create(
+        cls,
+        context_file_paths: list[Path] | list[str] | None = None,
+        validate_lean_project_root: bool = True,
+        project_input_type: ProjectInputType = ...,
+    ) -> "Project":
         """Create a new proof project."""
         ...
 
     @classmethod
-    async def from_id(cls, project_id: str) -> Project:
+    async def from_id(cls, project_id: str) -> "Project":
         """Load an existing project by ID."""
         ...
 
     @classmethod
-    async def list_projects(cls) -> tuple[list[Project], Pagination]:
-        """List all projects."""
+    async def list_projects(
+        cls,
+        pagination_key: str | None = None,
+        limit: int = 30,
+        status: ProjectStatus | list[ProjectStatus] | None = None,
+    ) -> tuple[list["Project"], str | None]:
+        """List projects. Returns (projects, next_pagination_key)."""
         ...
 
-    @overload
     @classmethod
     async def prove_from_file(
         cls,
-        input_file_path: str,
-        output_file_path: str | None = ...,
-        auto_add_imports: bool = ...,
         *,
-        wait_for_completion: Literal[True] = ...,
-        project_input_type: ProjectInputType | None = ...,
-        formal_input_context: str | None = ...,
-        **kwargs: object,
+        input_file_path: Path | str | None = None,
+        input_content: str | None = None,
+        auto_add_imports: bool = True,
+        context_file_paths: list[Path] | list[str] | None = None,
+        context_is_folder: bool = False,
+        validate_lean_project: bool = True,
+        wait_for_completion: bool = True,
+        polling_interval_seconds: int = 30,
+        max_polling_failures: int = 3,
+        output_file_path: Path | str | None = None,
+        project_input_type: ProjectInputType = ...,
+        formal_input_context: Path | str | None = None,
     ) -> str:
-        """Prove a Lean file, waiting for completion. Returns the output path."""
+        """Prove from file or content. Always returns output path string."""
         ...
 
-    @overload
-    @classmethod
-    async def prove_from_file(
-        cls,
-        input_file_path: str,
-        output_file_path: str | None = ...,
-        auto_add_imports: bool = ...,
-        *,
-        wait_for_completion: Literal[False],
-        project_input_type: ProjectInputType | None = ...,
-        formal_input_context: str | None = ...,
-        **kwargs: object,
-    ) -> Project:
-        """Prove a Lean file without waiting. Returns the Project for polling."""
+    async def add_context(
+        self,
+        context_file_paths: list[Path] | list[str],
+        batch_size: int = 10,
+        validate_lean_project_root: bool = True,
+        project_root: Path | None = None,
+    ) -> None:
+        """Add context files to the project."""
         ...
 
-    @overload
-    @classmethod
-    async def prove_from_file(
-        cls,
-        input_file_path: str,
-        output_file_path: str | None = ...,
-        auto_add_imports: bool = ...,
-        *,
-        wait_for_completion: bool,
-        project_input_type: ProjectInputType | None = ...,
-        formal_input_context: str | None = ...,
-        **kwargs: object,
-    ) -> str | Project:
-        """Prove a Lean file. Returns path or Project depending on wait_for_completion."""
-        ...
-
-    async def solve(self, input_content: str) -> None:
+    async def solve(
+        self,
+        input_file_path: Path | str | None = None,
+        input_content: str | None = None,
+        formal_input_context: Path | str | None = None,
+    ) -> None:
         """Submit code to solve."""
         ...
 
@@ -103,14 +106,15 @@ class Project:
         """Refresh project status from the API."""
         ...
 
-    async def add_context(self, context_files: list[str]) -> None:
-        """Add context files to the project."""
+    async def wait_for_completion(
+        self,
+        output_file_path: Path | str,
+        polling_interval_seconds: int = 30,
+        max_polling_failures: int = 3,
+    ) -> str:
+        """Wait for the proof to complete. Returns output path."""
         ...
 
-    async def wait_for_completion(self, output_file_path: str) -> str | None:
-        """Wait for the proof to complete and write the solution."""
-        ...
-
-    async def get_solution(self, output_path: str | None = ...) -> str | None:
-        """Get the solution and write it to a file."""
+    async def get_solution(self, output_path: Path | str | None = None) -> Path:
+        """Get the solution and write it to a file. Returns the path."""
         ...

@@ -16,22 +16,51 @@ If a rule seems wrong for a specific case, fix the code structure to satisfy the
 
 This is an MCP (Model Context Protocol) server that wraps Harmonic's Aristotle theorem prover, enabling AI assistants to invoke automated theorem proving during Lean 4 development. The server exposes tools for proving theorems, filling in `sorry` statements, and formalizing natural language to Lean 4.
 
-## Development Commands
+## Build System
+
+The project uses a Makefile that auto-detects the `.venv` virtual environment. Run `make help` for all targets.
+
+### Setup
 
 ```bash
-# Install dependencies (use virtual environment)
-python -m venv .venv
-source .venv/bin/activate
-pip install -e .
+make venv          # Create virtual environment
+make install-dev   # Install with dev dependencies (ruff, mypy, pytest)
+make install-api   # Install with Aristotle API support
+make install-all   # Install everything (dev + api)
+```
 
-# Install with API support (requires aristotlelib)
-pip install -e ".[api]"
+### Code Quality
 
-# Run the MCP server
-python -m aristotle_mcp
+```bash
+make check         # Run all checks (lint + type-check)
+make lint          # Run ruff linter
+make format        # Auto-fix lint issues
+make type-check    # Run mypy
+```
 
-# Run in mock mode (no API key needed)
-ARISTOTLE_MOCK=true python -m aristotle_mcp
+### Testing
+
+```bash
+make test          # Run mock tests (default, no API key needed)
+make test-api      # Run live API tests (requires ARISTOTLE_API_KEY)
+make test-all      # Run all available tests
+make test-lean     # Verify the test Lean project builds
+make verify        # Full verification (lint + type-check + tests + lean)
+```
+
+### Running
+
+```bash
+make run           # Start MCP server
+make run-mock      # Start MCP server in mock mode
+```
+
+### Build & Clean
+
+```bash
+make build         # Build wheel package
+make clean         # Remove build artifacts
+make clean-all     # Remove all generated files (build + test + lean artifacts)
 ```
 
 ## Environment Configuration
@@ -64,9 +93,25 @@ src/aristotle_mcp/
 
 - `aristotle://status` - Returns connection status (mock_mode, api_key_configured, ready)
 
-## Testing
+## Test Structure
 
-Use `ARISTOTLE_MOCK=true` to test MCP protocol without API calls. Mock behavior in `mock.py`:
+```
+tests/
+├── test_mock.py       # Mock mode tests (no API key needed)
+├── test_api.py        # Direct aristotlelib API tests
+├── test_api_tools.py  # Live API tool tests (skipped by default)
+├── fixtures/
+│   └── example.lean   # Test fixture with Lean code
+└── lean_project/      # Full Lean project for integration tests
+    └── TestProject/
+        ├── Basic.lean
+        └── Arithmetic.lean
+```
+
+### Mock Mode Behavior
+
+Mock mode (`ARISTOTLE_MOCK=true`) simulates the Aristotle API for testing:
 - Code containing `false_theorem` or `bad_lemma` returns counterexamples
 - Code containing `timeout` or `hard` returns failed status
 - Files with >5 sorries return partial success
+- Async operations simulate queued → in_progress → complete flow

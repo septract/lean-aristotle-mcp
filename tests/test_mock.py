@@ -18,11 +18,17 @@ from aristotle_mcp.tools import (
 )
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
+LEAN_PROJECT_DIR = Path(__file__).parent / "lean_project"
 
 
 @pytest.fixture
 def example_lean_file() -> Path:
     return FIXTURES_DIR / "example.lean"
+
+
+@pytest.fixture
+def lean_project_file() -> Path:
+    return LEAN_PROJECT_DIR / "TestProject" / "Arithmetic.lean"
 
 
 def test_mock_mode_enabled() -> None:
@@ -153,6 +159,33 @@ async def test_prove_file_not_found() -> None:
 
     assert result.status == "error"
     assert "not found" in result.message.lower()
+
+
+async def test_prove_file_output_exists(example_lean_file: Path, tmp_path: Path) -> None:
+    """Test error when output file already exists."""
+    # Use tmp_path to avoid touching any real files
+    test_output_path = tmp_path / "existing_output.lean"
+    test_output_path.write_text("-- existing file for test")
+
+    result = await prove_file(str(example_lean_file), output_path=str(test_output_path))
+
+    assert result.status == "error"
+    assert "already exists" in result.message.lower()
+    # tmp_path is automatically cleaned up by pytest
+
+
+async def test_prove_lean_project(lean_project_file: Path, tmp_path: Path) -> None:
+    """Test proving a file from the lean_project test fixture."""
+    # Use tmp_path for output to avoid touching any real files
+    test_output_path = tmp_path / "Arithmetic_solved.lean"
+
+    result = await prove_file(str(lean_project_file), output_path=str(test_output_path))
+
+    assert result.status in ("proved", "partial")
+    assert result.sorries_total == 4  # 4 theorems with sorry
+    assert result.sorries_filled == 4  # Mock fills all (< 5 sorries)
+    assert result.output_path is not None
+    # tmp_path is automatically cleaned up by pytest
 
 
 async def test_formalize() -> None:

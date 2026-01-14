@@ -8,6 +8,7 @@ import sys
 from mcp.server import FastMCP
 
 from aristotle_mcp.tools import (
+    ResultDict,
     check_proof,
     check_prove_file,
     formalize,
@@ -33,7 +34,7 @@ async def prove_tool(
     context_files: list[str] | None = None,
     hint: str | None = None,
     wait: bool = True,
-) -> str:
+) -> ResultDict:
     """Attempt to prove Lean 4 code containing `sorry` statements.
 
     Returns the filled proof on success, or a counterexample if the statement is false.
@@ -55,11 +56,11 @@ async def prove_tool(
         If wait=False, returns status="submitted" with project_id to use with check_proof.
     """
     result = await prove(code=code, context_files=context_files, hint=hint, wait=wait)
-    return json.dumps(result.to_dict(), indent=2)
+    return result.to_dict()
 
 
 @mcp.tool(name="check_proof")
-async def check_proof_tool(project_id: str) -> str:
+async def check_proof_tool(project_id: str) -> ResultDict:
     """Check the status of a previously submitted proof.
 
     Use this tool to poll for results after calling prove with wait=False.
@@ -75,7 +76,7 @@ async def check_proof_tool(project_id: str) -> str:
         - message: Human-readable status description
     """
     result = await check_proof(project_id=project_id)
-    return json.dumps(result.to_dict(), indent=2)
+    return result.to_dict()
 
 
 @mcp.tool(name="prove_file")
@@ -83,7 +84,7 @@ async def prove_file_tool(
     file_path: str,
     output_path: str | None = None,
     wait: bool = True,
-) -> str:
+) -> ResultDict:
     """Prove all `sorry` statements in a Lean file.
 
     Automatically resolves imports from the project's lake dependencies.
@@ -93,7 +94,7 @@ async def prove_file_tool(
 
     Args:
         file_path: Path to Lean file with `sorry` statements
-        output_path: Where to write the solution (default: {file}.solved.lean)
+        output_path: Where to write the solution (default: {file}_aristotle.lean)
         wait: If True (default), block until complete. If False, submit
               and return immediately with project_id for polling.
 
@@ -102,14 +103,14 @@ async def prove_file_tool(
         If wait=False, returns status="submitted" with project_id for check_prove_file.
     """
     result = await prove_file(file_path=file_path, output_path=output_path, wait=wait)
-    return json.dumps(result.to_dict(), indent=2)
+    return result.to_dict()
 
 
 @mcp.tool(name="check_prove_file")
 async def check_prove_file_tool(
     project_id: str,
     output_path: str | None = None,
-) -> str:
+) -> ResultDict:
     """Check the status of a previously submitted file proof.
 
     Use this tool to poll for results after calling prove_file with wait=False.
@@ -127,7 +128,7 @@ async def check_prove_file_tool(
         - message: Human-readable status description
     """
     result = await check_prove_file(project_id=project_id, output_path=output_path)
-    return json.dumps(result.to_dict(), indent=2)
+    return result.to_dict()
 
 
 @mcp.tool(name="formalize")
@@ -135,7 +136,7 @@ async def formalize_tool(
     description: str,
     prove: bool = False,
     context_file: str | None = None,
-) -> str:
+) -> ResultDict:
     """Convert a natural language mathematical statement into Lean 4 code.
 
     Use this tool when you have a mathematical concept described in English
@@ -153,7 +154,7 @@ async def formalize_tool(
         JSON with status (formalized/proved/failed/error), lean_code, and message
     """
     result = await formalize(description=description, prove=prove, context_file=context_file)
-    return json.dumps(result.to_dict(), indent=2)
+    return result.to_dict()
 
 
 @mcp.resource("aristotle://status")

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import tempfile
 from dataclasses import dataclass
 
@@ -16,12 +17,52 @@ from aristotle_mcp.mock import (
     mock_prove_file,
 )
 
+# Regex for counting sorry statements (word boundary to avoid matching "sorryExample")
+_SORRY_PATTERN = re.compile(r"\bsorry\b")
+
+
+def _count_sorries(text: str) -> int:
+    """Count sorry statements in text using word boundary matching."""
+    matches: list[str] = _SORRY_PATTERN.findall(text)
+    return len(matches)
+
 # Type for JSON-serializable result dictionaries
 ResultValue = str | int | None
 ResultDict = dict[str, ResultValue]
 
 # Track whether .env has been loaded
 _dotenv_loaded = False
+
+# Metadata store for async proof jobs (persists across polls within server lifetime)
+# Maps project_id -> metadata dict
+_async_job_metadata: dict[str, dict[str, str | int]] = {}
+
+
+def _find_unique_path(path: str, max_attempts: int = 1000) -> str:
+    """Find a unique path by adding a number suffix if the file exists.
+
+    Example: foo_aristotle.lean -> foo_aristotle.1.lean -> foo_aristotle.2.lean
+
+    Args:
+        path: The base path to check
+        max_attempts: Maximum number of suffixes to try before raising
+
+    Returns:
+        A path that doesn't exist
+
+    Raises:
+        RuntimeError: If no unique path found within max_attempts
+    """
+    if not os.path.exists(path):
+        return path
+
+    base, ext = os.path.splitext(path)
+    for counter in range(1, max_attempts + 1):
+        new_path = f"{base}.{counter}{ext}"
+        if not os.path.exists(new_path):
+            return new_path
+
+    raise RuntimeError(f"Could not find unique path after {max_attempts} attempts: {path}")
 
 
 def _ensure_dotenv() -> None:
@@ -30,6 +71,60 @@ def _ensure_dotenv() -> None:
     if not _dotenv_loaded:
         load_dotenv()
         _dotenv_loaded = True
+
+
+def _analyze_solution_file(
+    solution_path: str,
+    sorries_total: int,
+    project_id: str | None = None,
+) -> ProveFileResult:
+    """Analyze a completed solution file and return the appropriate result.
+
+    Args:
+        solution_path: Path to the solution file
+        sorries_total: Original number of sorries in the input
+        project_id: Optional project ID to include in result
+
+    Returns:
+        ProveFileResult with status based on remaining sorries
+    """
+    absolute_path = os.path.abspath(solution_path)
+
+    if not os.path.exists(absolute_path):
+        return ProveFileResult(
+            status="failed",
+            project_id=project_id,
+            sorries_total=sorries_total,
+            percent_complete=100,
+            message="Completed but solution file not found",
+        )
+
+    with open(absolute_path) as f:
+        solved = f.read()
+
+    remaining = _count_sorries(solved)
+    filled = max(0, sorries_total - remaining)
+
+    if remaining == 0:
+        status = "proved"
+    elif filled > 0:
+        status = "partial"
+    else:
+        status = "failed"
+
+    message = f"Filled {filled} of {sorries_total} sorry statements"
+    if remaining > 0:
+        message += f", {remaining} remaining"
+
+    return ProveFileResult(
+        status=status,
+        output_path=absolute_path,
+        sorries_filled=filled,
+        sorries_total=sorries_total,
+        project_id=project_id,
+        percent_complete=100,
+        message=message,
+    )
 
 
 def is_mock_mode() -> bool:
@@ -141,6 +236,7 @@ async def prove(
             code=mock_result.code,
             counterexample=mock_result.counterexample,
             project_id=mock_result.project_id,
+            percent_complete=mock_result.percent_complete,
             message=mock_result.message,
         )
 
@@ -153,6 +249,15 @@ async def prove(
                 "Set ARISTOTLE_MOCK=true for testing."
             ),
         )
+
+    # Validate context files exist before making API calls
+    if context_files:
+        for ctx_file in context_files:
+            if not os.path.exists(ctx_file):
+                return ProveResult(
+                    status="error",
+                    message=f"Context file not found: {ctx_file}",
+                )
 
     try:
         from aristotlelib import Project
@@ -313,6 +418,14 @@ async def check_proof(project_id: str) -> ProveResult:
                 message=f"Proof is being computed ({pct}% complete)",
             )
 
+        elif status_str == "PENDING_RETRY":
+            return ProveResult(
+                status="in_progress",
+                project_id=project_id,
+                percent_complete=pct,
+                message="Proof is pending retry",
+            )
+
         elif status_str == "FAILED":
             return ProveResult(
                 status="failed",
@@ -347,7 +460,7 @@ async def prove_file(
 
     Args:
         file_path: Path to Lean file with sorry statements
-        output_path: Where to write solution (default: {file}.solved.lean)
+        output_path: Where to write solution (default: {file}_aristotle.lean)
         wait: If True (default), block until complete. If False, return immediately
               with a project_id that can be polled with check_prove_file.
 
@@ -361,10 +474,23 @@ async def prove_file(
             message=f"File not found: {file_path}",
         )
 
+    # Determine the actual output path (matches aristotlelib's default naming)
+    actual_output_path = output_path
+    if actual_output_path is None:
+        base, ext = os.path.splitext(file_path)
+        actual_output_path = f"{base}_aristotle{ext}"
+
+    # Check if output would overwrite existing file
+    if os.path.exists(actual_output_path):
+        return ProveFileResult(
+            status="error",
+            message=f"Output file already exists: {actual_output_path}",
+        )
+
     # Count sorries in original file
     with open(file_path) as f:
         original = f.read()
-    original_sorries = original.count("sorry")
+    original_sorries = _count_sorries(original)
 
     if is_mock_mode():
         mock_result = mock_prove_file(file_path, output_path, wait=wait)
@@ -389,54 +515,52 @@ async def prove_file(
         )
 
     try:
-        from aristotlelib import Project
+        from aristotlelib import Project, ProjectStatus
 
-        # Use the convenience method for file-based proving
+        # Use prove_from_file for both sync and async modes
+        # This ensures auto_add_imports is used to handle local dependencies
         result = await Project.prove_from_file(
             input_file_path=file_path,
-            output_file_path=output_path,
+            output_file_path=actual_output_path,
             auto_add_imports=True,
             wait_for_completion=wait,
         )
 
-        # If not waiting, result is a Project object
-        # Use isinstance to narrow the type for mypy
-        if not wait and not isinstance(result, str):
+        # For async mode, we need to find the project_id for polling
+        if not wait:
+            # List recent projects to find the one we just created
+            projects, _ = await Project.list_projects(
+                limit=5,
+                status=[ProjectStatus.QUEUED, ProjectStatus.IN_PROGRESS, ProjectStatus.NOT_STARTED],
+            )
+
+            if not projects:
+                return ProveFileResult(
+                    status="error",
+                    message="Could not find submitted project",
+                )
+
+            # Take the most recent project (first in list)
+            project = projects[0]
+            project_id = str(project.project_id)
+
+            # Store metadata for retrieval when polling
+            _async_job_metadata[project_id] = {
+                "file_path": os.path.abspath(file_path),
+                "output_path": actual_output_path,
+                "sorries_total": original_sorries,
+            }
+
             return ProveFileResult(
                 status="submitted",
+                output_path=actual_output_path,
                 sorries_total=original_sorries,
-                project_id=str(result.project_id),
+                project_id=project_id,
                 message="Proof submitted. Use check_prove_file to poll for results.",
             )
 
-        # Waiting - result is the output path (str)
-        if isinstance(result, str) and os.path.exists(result):
-            with open(result) as f:
-                solved = f.read()
-            remaining_sorries = solved.count("sorry")
-            filled = original_sorries - remaining_sorries
-
-            if remaining_sorries == 0:
-                status = "proved"
-            elif filled > 0:
-                status = "partial"
-            else:
-                status = "failed"
-
-            return ProveFileResult(
-                status=status,
-                output_path=result,
-                sorries_filled=filled,
-                sorries_total=original_sorries,
-                percent_complete=100,
-                message=f"Filled {filled} of {original_sorries} sorry statements",
-            )
-        else:
-            return ProveFileResult(
-                status="failed",
-                sorries_total=original_sorries,
-                message="No solution file generated",
-            )
+        # Sync mode completed - analyze the result
+        return _analyze_solution_file(result, original_sorries)
 
     except Exception as e:
         return ProveFileResult(
@@ -474,6 +598,15 @@ async def check_prove_file(project_id: str, output_path: str | None = None) -> P
             message="ARISTOTLE_API_KEY environment variable not set.",
         )
 
+    # Retrieve stored metadata if available
+    metadata = _async_job_metadata.get(project_id, {})
+    stored_output_path = metadata.get("output_path")
+    stored_sorries_total = metadata.get("sorries_total", 0)
+
+    # Use stored output path if none provided
+    if output_path is None and isinstance(stored_output_path, str):
+        output_path = stored_output_path
+
     try:
         from aristotlelib import Project
 
@@ -488,37 +621,17 @@ async def check_prove_file(project_id: str, output_path: str | None = None) -> P
         pct = project.percent_complete
 
         if status_str == "COMPLETE":
+            # Find a unique path to avoid overwriting existing files
+            safe_output_path = _find_unique_path(output_path) if output_path else None
+
             # Get the solution
-            solution_path = await project.get_solution(output_path=output_path)
+            solution_path = await project.get_solution(output_path=safe_output_path)
 
-            if solution_path and os.path.exists(solution_path):
-                with open(solution_path) as f:
-                    solved = f.read()
+            # Clean up metadata now that job is complete
+            _async_job_metadata.pop(project_id, None)
 
-                # Count sorries - we don't have original count, so just report what's left
-                remaining = solved.count("sorry")
-                # Estimate original based on description if available
-                sorries_total = 0  # Unknown without original file
-                sorries_filled = 0 if remaining > 0 else sorries_total
-
-                status = "proved" if remaining == 0 else "partial"
-
-                return ProveFileResult(
-                    status=status,
-                    output_path=str(solution_path),
-                    sorries_filled=sorries_filled,
-                    sorries_total=sorries_total,
-                    project_id=project_id,
-                    percent_complete=100,
-                    message="Proof completed",
-                )
-
-            return ProveFileResult(
-                status="failed",
-                project_id=project_id,
-                percent_complete=pct,
-                message="Completed but no solution available",
-            )
+            sorries_total = int(stored_sorries_total) if stored_sorries_total else 0
+            return _analyze_solution_file(str(solution_path), sorries_total, project_id)
 
         elif status_str in ("QUEUED", "NOT_STARTED"):
             return ProveFileResult(
@@ -536,7 +649,17 @@ async def check_prove_file(project_id: str, output_path: str | None = None) -> P
                 message=f"Proof is being computed ({pct}% complete)",
             )
 
+        elif status_str == "PENDING_RETRY":
+            return ProveFileResult(
+                status="in_progress",
+                project_id=project_id,
+                percent_complete=pct,
+                message="Proof is pending retry",
+            )
+
         elif status_str == "FAILED":
+            # Clean up metadata for failed jobs
+            _async_job_metadata.pop(project_id, None)
             return ProveFileResult(
                 status="failed",
                 project_id=project_id,
@@ -624,7 +747,7 @@ async def formalize(
                     lean_code = f.read()
 
                 # Check if it was proved (no sorries remaining)
-                has_sorry = "sorry" in lean_code
+                has_sorry = _count_sorries(lean_code) > 0
                 if prove and has_sorry:
                     status = "formalized"  # Formalized but not proved
                 elif prove and not has_sorry:

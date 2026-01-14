@@ -248,10 +248,17 @@ def mock_prove_file(
             status="error", sorries_total=0, message="No 'sorry' statements found in the file"
         )
 
-    # Determine output path
+    # Determine output path (matches aristotlelib's default naming)
     if output_path is None:
         base, ext = os.path.splitext(file_path)
-        output_path = f"{base}.solved{ext}"
+        output_path = f"{base}_aristotle{ext}"
+
+    # Check if output would overwrite existing file
+    if os.path.exists(output_path):
+        return MockProveFileResult(
+            status="error",
+            message=f"Output file already exists: {output_path}",
+        )
 
     # Determine final result
     if sorry_count > 5:
