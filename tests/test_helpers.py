@@ -1,14 +1,17 @@
 """Unit tests for helper functions and models."""
 
+import os
 from pathlib import Path
 
 import pytest
 
 from aristotle_mcp.models import FormalizeResult, ProveFileResult, ProveResult
 from aristotle_mcp.tools import (
+    _canonicalize_path,
     _count_sorries,
     _find_unique_path,
     _map_api_status,
+    _sanitize_api_error,
 )
 
 
@@ -47,12 +50,19 @@ class TestCountSorries:
 
 
 class TestFindUniquePath:
-    """Tests for _find_unique_path helper."""
+    """Tests for _find_unique_path helper.
+
+    Note: _find_unique_path atomically creates the file it returns to prevent
+    TOCTOU race conditions. Tests must clean up or account for this.
+    """
 
     def test_path_does_not_exist(self, tmp_path: Path) -> None:
-        """Returns original path if it doesn't exist."""
+        """Returns original path if it doesn't exist and creates it atomically."""
         path = str(tmp_path / "nonexistent.lean")
-        assert _find_unique_path(path) == path
+        result = _find_unique_path(path)
+        assert result == path
+        # Verify file was atomically created
+        assert os.path.exists(result)
 
     def test_path_exists_finds_unique(self, tmp_path: Path) -> None:
         """Finds unique path by adding number suffix."""
@@ -63,6 +73,8 @@ class TestFindUniquePath:
         result = _find_unique_path(str(original))
         expected = str(tmp_path / "test.1.lean")
         assert result == expected
+        # Verify unique file was atomically created
+        assert os.path.exists(result)
 
     def test_multiple_existing_files(self, tmp_path: Path) -> None:
         """Skips existing numbered files."""
@@ -74,6 +86,8 @@ class TestFindUniquePath:
         result = _find_unique_path(str(tmp_path / "test.lean"))
         expected = str(tmp_path / "test.3.lean")
         assert result == expected
+        # Verify unique file was atomically created
+        assert os.path.exists(result)
 
     def test_max_attempts_exceeded(self, tmp_path: Path) -> None:
         """Raises RuntimeError if max_attempts exceeded."""
@@ -86,6 +100,16 @@ class TestFindUniquePath:
 
         with pytest.raises(RuntimeError, match="Could not find unique path"):
             _find_unique_path(str(original), max_attempts=3)
+
+    def test_atomic_creation_prevents_race(self, tmp_path: Path) -> None:
+        """File is created atomically (O_CREAT | O_EXCL) to prevent races."""
+        path = str(tmp_path / "atomic_test.lean")
+        result = _find_unique_path(path)
+
+        # File should exist immediately after function returns
+        assert os.path.exists(result)
+        # File should be empty (just created, not written to)
+        assert os.path.getsize(result) == 0
 
 
 class TestMapApiStatus:
@@ -235,3 +259,90 @@ class TestFormalizeResultToDict:
         )
         d = result.to_dict()
         assert d["lean_code"] == "theorem x : True := trivial"
+
+
+class TestCanonicalizePath:
+    """Tests for _canonicalize_path helper."""
+
+    def test_absolute_path_unchanged(self, tmp_path: Path) -> None:
+        """Absolute paths are returned as realpath."""
+        path = str(tmp_path / "test.lean")
+        result = _canonicalize_path(path)
+        assert result == os.path.realpath(path)
+
+    def test_relative_path_made_absolute(self) -> None:
+        """Relative paths are converted to absolute."""
+        result = _canonicalize_path("relative/path.lean")
+        assert os.path.isabs(result)
+
+    def test_dot_dot_resolved(self, tmp_path: Path) -> None:
+        """Parent directory references are resolved."""
+        # Create a subdirectory
+        subdir = tmp_path / "subdir"
+        subdir.mkdir()
+        path = str(subdir / ".." / "test.lean")
+        result = _canonicalize_path(path)
+        # Should resolve to tmp_path/test.lean, not tmp_path/subdir/../test.lean
+        assert ".." not in result
+        assert result == os.path.realpath(str(tmp_path / "test.lean"))
+
+    def test_symlink_resolved(self, tmp_path: Path) -> None:
+        """Symlinks are resolved to real paths."""
+        # Create a real file
+        real_file = tmp_path / "real.lean"
+        real_file.write_text("-- real")
+        # Create a symlink
+        symlink = tmp_path / "link.lean"
+        symlink.symlink_to(real_file)
+
+        result = _canonicalize_path(str(symlink))
+        assert result == str(real_file)
+
+
+class TestSanitizeApiError:
+    """Tests for _sanitize_api_error helper."""
+
+    def test_timeout_error(self) -> None:
+        """Timeout errors return appropriate message."""
+        error = Exception("Connection timed out after 30s")
+        result = _sanitize_api_error(error)
+        assert "timed out" in result.lower() or "timeout" in result.lower()
+
+    def test_connection_error(self) -> None:
+        """Connection errors return appropriate message."""
+        error = Exception("Connection refused to api.example.com")
+        result = _sanitize_api_error(error)
+        assert "connection" in result.lower()
+
+    def test_auth_error(self) -> None:
+        """Authentication errors return appropriate message."""
+        error = Exception("Unauthorized: invalid API key")
+        result = _sanitize_api_error(error)
+        assert "authentication" in result.lower() or "api key" in result.lower()
+
+    def test_rate_limit_error(self) -> None:
+        """Rate limit errors return appropriate message."""
+        error = Exception("Rate limit exceeded, too many requests")
+        result = _sanitize_api_error(error)
+        assert "rate limit" in result.lower()
+
+    def test_not_found_error(self) -> None:
+        """Not found errors return appropriate message."""
+        error = Exception("Project not found: abc-123")
+        result = _sanitize_api_error(error)
+        assert "not found" in result.lower()
+
+    def test_counterexample_preserved(self) -> None:
+        """Counterexample messages are passed through."""
+        error = Exception("Counterexample found: n=0")
+        result = _sanitize_api_error(error)
+        assert "counterexample" in result.lower()
+
+    def test_generic_error_sanitized(self) -> None:
+        """Generic errors return safe message without internals."""
+        error = Exception("Internal error at /usr/local/lib/python/aristotle.py:123")
+        result = _sanitize_api_error(error)
+        # Should not leak file paths or line numbers
+        assert "/usr/local" not in result
+        assert "aristotle.py" not in result
+        assert ":123" not in result

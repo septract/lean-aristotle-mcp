@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 import tempfile
+import threading
 import time
 
 from dotenv import load_dotenv
@@ -23,6 +25,9 @@ from aristotle_mcp.models import (
     ResultDict,
     ResultValue,
 )
+
+# Configure module logger
+_logger = logging.getLogger(__name__)
 
 # Re-export types for backwards compatibility
 __all__ = [
@@ -46,12 +51,21 @@ _SORRY_PATTERN = re.compile(r"\bsorry\b")
 # Track whether .env has been loaded
 _dotenv_loaded = False
 
+# Thread lock for accessing shared state
+_metadata_lock = threading.Lock()
+
 # Metadata store for async proof jobs (persists across polls within server lifetime)
 # Maps project_id -> metadata dict with timestamp for cleanup
+# Access must be protected by _metadata_lock
 _async_job_metadata: dict[str, dict[str, str | int | float]] = {}
 
 # Cleanup jobs older than 1 hour
 _METADATA_TTL_SECONDS = 3600
+
+# Input size limits (defense-in-depth)
+_MAX_CODE_SIZE = 1_000_000  # 1MB for code input
+_MAX_DESCRIPTION_SIZE = 100_000  # 100KB for natural language descriptions
+_MAX_FILE_SIZE = 10_000_000  # 10MB for file inputs
 
 # Helpful error message for missing API key
 _API_KEY_ERROR = (
@@ -71,6 +85,8 @@ def _count_sorries(text: str) -> int:
 def _find_unique_path(path: str, max_attempts: int = 1000) -> str:
     """Find a unique path by adding a number suffix if the file exists.
 
+    Uses atomic file creation to avoid TOCTOU race conditions.
+
     Example: foo_aristotle.lean -> foo_aristotle.1.lean -> foo_aristotle.2.lean
 
     Args:
@@ -78,19 +94,25 @@ def _find_unique_path(path: str, max_attempts: int = 1000) -> str:
         max_attempts: Maximum number of suffixes to try before raising
 
     Returns:
-        A path that doesn't exist
+        A path that was atomically created (empty file)
 
     Raises:
         RuntimeError: If no unique path found within max_attempts
     """
-    if not os.path.exists(path):
-        return path
+    # Try the original path first, then numbered variants
+    candidates = [path] + [
+        f"{os.path.splitext(path)[0]}.{i}{os.path.splitext(path)[1]}"
+        for i in range(1, max_attempts + 1)
+    ]
 
-    base, ext = os.path.splitext(path)
-    for counter in range(1, max_attempts + 1):
-        new_path = f"{base}.{counter}{ext}"
-        if not os.path.exists(new_path):
-            return new_path
+    for candidate in candidates:
+        try:
+            # O_CREAT | O_EXCL atomically creates file only if it doesn't exist
+            fd = os.open(candidate, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+            os.close(fd)
+            return candidate
+        except FileExistsError:
+            continue
 
     raise RuntimeError(f"Could not find unique path after {max_attempts} attempts: {path}")
 
@@ -104,14 +126,68 @@ def _ensure_dotenv() -> None:
 
 
 def _cleanup_stale_metadata() -> None:
-    """Remove metadata entries older than TTL to prevent memory leaks."""
+    """Remove metadata entries older than TTL to prevent memory leaks.
+
+    Thread-safe: acquires _metadata_lock.
+    """
     now = time.time()
-    stale_ids = [
-        pid for pid, meta in _async_job_metadata.items()
-        if now - float(meta.get("timestamp", 0)) > _METADATA_TTL_SECONDS
-    ]
-    for pid in stale_ids:
-        _async_job_metadata.pop(pid, None)
+    with _metadata_lock:
+        stale_ids = [
+            pid for pid, meta in _async_job_metadata.items()
+            if now - float(meta.get("timestamp", 0)) > _METADATA_TTL_SECONDS
+        ]
+        for pid in stale_ids:
+            _async_job_metadata.pop(pid, None)
+
+
+def _canonicalize_path(path: str) -> str:
+    """Canonicalize a file path to prevent path traversal issues.
+
+    Resolves symlinks, removes . and .. components, and returns absolute path.
+
+    Args:
+        path: The path to canonicalize
+
+    Returns:
+        Canonicalized absolute path
+    """
+    return os.path.realpath(os.path.abspath(path))
+
+
+def _sanitize_api_error(error: Exception) -> str:
+    """Sanitize an API error for safe return to clients.
+
+    Logs the full error for debugging but returns a generic message
+    to avoid leaking internal details.
+
+    Args:
+        error: The exception to sanitize
+
+    Returns:
+        A safe error message for the client
+    """
+    # Log full error for debugging
+    _logger.exception("API error occurred")
+
+    error_str = str(error).lower()
+
+    # Return specific messages for known error types
+    if "timeout" in error_str or "timed out" in error_str:
+        return "Request timed out. Please try again."
+    if "connection" in error_str or "network" in error_str:
+        return "Connection error. Please check your network and try again."
+    if "unauthorized" in error_str or "authentication" in error_str:
+        return "Authentication failed. Please check your API key."
+    if "rate limit" in error_str or "too many" in error_str:
+        return "Rate limit exceeded. Please wait before retrying."
+    if "not found" in error_str:
+        return "Resource not found."
+    if "counterexample" in error_str:
+        # This is actually useful information, pass it through
+        return str(error)
+
+    # Generic fallback
+    return "An error occurred while processing your request."
 
 
 def _map_api_status(status_str: str, percent_complete: int | None) -> tuple[str, str]:
@@ -225,6 +301,13 @@ async def prove(
         ProveResult with status and either filled code or counterexample.
         If wait=False, returns status="submitted" with project_id for polling.
     """
+    # Validate input size
+    if len(code) > _MAX_CODE_SIZE:
+        return ProveResult(
+            status="error",
+            message=f"Code exceeds maximum size of {_MAX_CODE_SIZE} bytes.",
+        )
+
     if is_mock_mode():
         return mock_prove(code, context_files, hint, wait=wait)
 
@@ -232,14 +315,18 @@ async def prove(
     if not has_api_key():
         return ProveResult(status="error", message=_API_KEY_ERROR)
 
-    # Validate context files exist before making API calls
+    # Validate and canonicalize context files before making API calls
+    canonicalized_context: list[str] | None = None
     if context_files:
+        canonicalized_context = []
         for ctx_file in context_files:
-            if not os.path.exists(ctx_file):
+            canonical = _canonicalize_path(ctx_file)
+            if not os.path.exists(canonical):
                 return ProveResult(
                     status="error",
                     message=f"Context file not found: {ctx_file}",
                 )
+            canonicalized_context.append(canonical)
 
     try:
         from aristotlelib import Project
@@ -248,8 +335,8 @@ async def prove(
         project = await Project.create()
 
         # Add context files if provided (async)
-        if context_files:
-            await project.add_context(context_files)
+        if canonicalized_context:
+            await project.add_context(canonicalized_context)
 
         # If hint is provided, add it as a comment
         code_with_hint = code
@@ -309,7 +396,7 @@ async def prove(
             )
         return ProveResult(
             status="error",
-            message=f"API error: {error_msg}",
+            message=_sanitize_api_error(e),
         )
 
 
@@ -383,7 +470,7 @@ async def check_proof(project_id: str) -> ProveResult:
         return ProveResult(
             status="error",
             project_id=project_id,
-            message=f"API error: {e!s}",
+            message=_sanitize_api_error(e),
         )
 
 
@@ -404,27 +491,45 @@ async def prove_file(
         ProveFileResult with status and counts.
         If wait=False, returns status="submitted" with project_id for polling.
     """
-    if not os.path.exists(file_path):
+    # Canonicalize path to prevent traversal issues
+    canonical_path = _canonicalize_path(file_path)
+
+    if not os.path.exists(canonical_path):
         return ProveFileResult(
             status="error",
             message=f"File not found: {file_path}",
         )
 
-    # Determine the actual output path (matches aristotlelib's default naming)
-    actual_output_path = output_path
-    if actual_output_path is None:
-        base, ext = os.path.splitext(file_path)
-        actual_output_path = f"{base}_aristotle{ext}"
+    # Check file size before reading
+    file_size = os.path.getsize(canonical_path)
+    if file_size > _MAX_FILE_SIZE:
+        return ProveFileResult(
+            status="error",
+            message=f"File exceeds maximum size of {_MAX_FILE_SIZE} bytes.",
+        )
 
-    # Check if output would overwrite existing file
-    if os.path.exists(actual_output_path):
+    # Determine the actual output path (matches aristotlelib's default naming)
+    actual_output_path: str
+    if output_path is None:
+        base, ext = os.path.splitext(canonical_path)
+        actual_output_path = f"{base}_aristotle{ext}"
+    else:
+        actual_output_path = _canonicalize_path(output_path)
+
+    # Atomically check if output would overwrite existing file
+    try:
+        fd = os.open(actual_output_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+        os.close(fd)
+        # File created successfully, remove it so API can create it
+        os.unlink(actual_output_path)
+    except FileExistsError:
         return ProveFileResult(
             status="error",
             message=f"Output file already exists: {actual_output_path}",
         )
 
     # Count sorries in original file
-    with open(file_path) as f:
+    with open(canonical_path) as f:
         original = f.read()
     original_sorries = _count_sorries(original)
 
@@ -441,7 +546,7 @@ async def prove_file(
         # Use prove_from_file for both sync and async modes
         # This ensures auto_add_imports is used to handle local dependencies
         result = await Project.prove_from_file(
-            input_file_path=file_path,
+            input_file_path=canonical_path,
             output_file_path=actual_output_path,
             auto_add_imports=True,
             wait_for_completion=wait,
@@ -471,13 +576,14 @@ async def prove_file(
             # Cleanup stale metadata before adding new entry
             _cleanup_stale_metadata()
 
-            # Store metadata for retrieval when polling
-            _async_job_metadata[project_id] = {
-                "file_path": os.path.abspath(file_path),
-                "output_path": actual_output_path,
-                "sorries_total": original_sorries,
-                "timestamp": time.time(),
-            }
+            # Store metadata for retrieval when polling (thread-safe)
+            with _metadata_lock:
+                _async_job_metadata[project_id] = {
+                    "file_path": canonical_path,
+                    "output_path": actual_output_path,
+                    "sorries_total": original_sorries,
+                    "timestamp": time.time(),
+                }
 
             return ProveFileResult(
                 status="submitted",
@@ -493,7 +599,7 @@ async def prove_file(
     except Exception as e:
         return ProveFileResult(
             status="error",
-            message=f"API error: {e!s}",
+            message=_sanitize_api_error(e),
         )
 
 
@@ -513,8 +619,9 @@ async def check_prove_file(project_id: str, output_path: str | None = None) -> P
     if not has_api_key():
         return ProveFileResult(status="error", message=_API_KEY_ERROR)
 
-    # Retrieve stored metadata if available
-    metadata = _async_job_metadata.get(project_id, {})
+    # Retrieve stored metadata if available (thread-safe)
+    with _metadata_lock:
+        metadata = _async_job_metadata.get(project_id, {}).copy()
     stored_output_path = metadata.get("output_path")
     stored_sorries_total = metadata.get("sorries_total", 0)
 
@@ -545,15 +652,17 @@ async def check_prove_file(project_id: str, output_path: str | None = None) -> P
             # Get the solution
             solution_path = await project.get_solution(output_path=safe_output_path)
 
-            # Clean up metadata now that job is complete
-            _async_job_metadata.pop(project_id, None)
+            # Clean up metadata now that job is complete (thread-safe)
+            with _metadata_lock:
+                _async_job_metadata.pop(project_id, None)
 
             sorries_total = int(stored_sorries_total) if stored_sorries_total else 0
             return _analyze_solution_file(str(solution_path), sorries_total, project_id)
 
         elif our_status == "failed":
-            # Clean up metadata for failed jobs
-            _async_job_metadata.pop(project_id, None)
+            # Clean up metadata for failed jobs (thread-safe)
+            with _metadata_lock:
+                _async_job_metadata.pop(project_id, None)
 
         return ProveFileResult(
             status=our_status,
@@ -566,7 +675,7 @@ async def check_prove_file(project_id: str, output_path: str | None = None) -> P
         return ProveFileResult(
             status="error",
             project_id=project_id,
-            message=f"API error: {e!s}",
+            message=_sanitize_api_error(e),
         )
 
 
@@ -586,6 +695,13 @@ async def formalize(
     Returns:
         FormalizeResult with status and Lean code
     """
+    # Validate input size
+    if len(description) > _MAX_DESCRIPTION_SIZE:
+        return FormalizeResult(
+            status="error",
+            message=f"Description exceeds maximum size of {_MAX_DESCRIPTION_SIZE} bytes.",
+        )
+
     if is_mock_mode():
         return mock_formalize(description, prove, context_file)
 
@@ -593,12 +709,15 @@ async def formalize(
     if not has_api_key():
         return FormalizeResult(status="error", message=_API_KEY_ERROR)
 
-    # Validate context file if provided
-    if context_file and not os.path.exists(context_file):
-        return FormalizeResult(
-            status="error",
-            message=f"Context file not found: {context_file}",
-        )
+    # Validate and canonicalize context file if provided
+    canonical_context: str | None = None
+    if context_file:
+        canonical_context = _canonicalize_path(context_file)
+        if not os.path.exists(canonical_context):
+            return FormalizeResult(
+                status="error",
+                message=f"Context file not found: {context_file}",
+            )
 
     try:
         from aristotlelib import Project, ProjectInputType
@@ -613,7 +732,7 @@ async def formalize(
             result_path = await Project.prove_from_file(
                 input_file_path=temp_path,
                 project_input_type=ProjectInputType.INFORMAL,
-                formal_input_context=context_file,
+                formal_input_context=canonical_context,
                 wait_for_completion=True,
             )
 
@@ -649,5 +768,5 @@ async def formalize(
     except Exception as e:
         return FormalizeResult(
             status="error",
-            message=f"API error: {e!s}",
+            message=_sanitize_api_error(e),
         )

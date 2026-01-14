@@ -2,7 +2,7 @@
 # ================================
 # Build, test, and development commands for the Aristotle theorem prover MCP server
 
-.PHONY: help install install-dev install-api install-all \
+.PHONY: help install install-dev \
         check lint format type-check \
         test test-mock test-api test-all test-lean \
         run run-mock \
@@ -66,17 +66,11 @@ venv: ## Create virtual environment
 	python -m venv $(VENV_DIR)
 	$(PIP) install --upgrade pip
 
-install: ## Install package in editable mode (minimal)
+install: ## Install package in editable mode
 	$(PIP) install -e .
 
 install-dev: ## Install with development dependencies
 	$(PIP) install -e ".[dev]"
-
-install-api: ## Install with Aristotle API support
-	$(PIP) install -e ".[api]"
-
-install-all: ## Install with all dependencies (dev + api)
-	$(PIP) install -e ".[dev,api]"
 
 #------------------------------------------------------------------------------
 # Code Quality

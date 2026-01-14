@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import re
+import threading
 import uuid
 from typing import TypedDict
 
@@ -12,7 +13,11 @@ from aristotle_mcp.models import FormalizeResult, ProveFileResult, ProveResult
 # Regex for counting sorry statements (word boundary to avoid matching "sorryExample")
 _SORRY_PATTERN = re.compile(r"\bsorry\b")
 
+# Thread lock for accessing shared mock state
+_mock_lock = threading.Lock()
+
 # In-memory store for mock async proofs
+# Access must be protected by _mock_lock
 _mock_projects: dict[str, _MockProjectData] = {}
 _mock_file_projects: dict[str, _MockFileProjectData] = {}
 
@@ -107,15 +112,16 @@ def mock_prove(
     # Generate a project ID
     project_id = f"mock-{uuid.uuid4()}"
 
-    # If not waiting, store the job and return immediately
+    # If not waiting, store the job and return immediately (thread-safe)
     if not wait:
-        _mock_projects[project_id] = _MockProjectData(
-            status=final_status,
-            code=final_code,
-            counterexample=final_counterexample,
-            message=final_message,
-            poll_count=0,
-        )
+        with _mock_lock:
+            _mock_projects[project_id] = _MockProjectData(
+                status=final_status,
+                code=final_code,
+                counterexample=final_counterexample,
+                message=final_message,
+                poll_count=0,
+            )
         return ProveResult(
             status="submitted",
             project_id=project_id,
@@ -146,41 +152,43 @@ def mock_check_proof(project_id: str) -> ProveResult:
     Returns:
         ProveResult with current status
     """
-    if project_id not in _mock_projects:
-        return ProveResult(
-            status="error",
-            project_id=project_id,
-            message=f"Unknown project ID: {project_id}",
-        )
+    with _mock_lock:
+        if project_id not in _mock_projects:
+            return ProveResult(
+                status="error",
+                project_id=project_id,
+                message=f"Unknown project ID: {project_id}",
+            )
 
-    project = _mock_projects[project_id]
-    project["poll_count"] += 1
+        project = _mock_projects[project_id]
+        project["poll_count"] += 1
+        poll_count = project["poll_count"]
 
-    # Simulate progression through statuses
-    if project["poll_count"] == 1:
-        return ProveResult(
-            status="queued",
-            project_id=project_id,
-            percent_complete=0,
-            message="Proof is queued, waiting to start",
-        )
-    elif project["poll_count"] == 2:
-        return ProveResult(
-            status="in_progress",
-            project_id=project_id,
-            percent_complete=50,
-            message="Proof is being computed (50% complete)",
-        )
-    else:
-        # Return final result
-        return ProveResult(
-            status=project["status"],
-            code=project["code"],
-            counterexample=project["counterexample"],
-            project_id=project_id,
-            percent_complete=100,
-            message=project["message"],
-        )
+        # Simulate progression through statuses
+        if poll_count == 1:
+            return ProveResult(
+                status="queued",
+                project_id=project_id,
+                percent_complete=0,
+                message="Proof is queued, waiting to start",
+            )
+        elif poll_count == 2:
+            return ProveResult(
+                status="in_progress",
+                project_id=project_id,
+                percent_complete=50,
+                message="Proof is being computed (50% complete)",
+            )
+        else:
+            # Return final result
+            return ProveResult(
+                status=project["status"],
+                code=project["code"],
+                counterexample=project["counterexample"],
+                project_id=project_id,
+                percent_complete=100,
+                message=project["message"],
+            )
 
 
 def mock_prove_file(
@@ -240,16 +248,17 @@ def mock_prove_file(
     # Generate project ID
     project_id = f"mock-file-{uuid.uuid4()}"
 
-    # If not waiting, store the job and return immediately
+    # If not waiting, store the job and return immediately (thread-safe)
     if not wait:
-        _mock_file_projects[project_id] = _MockFileProjectData(
-            status=final_status,
-            output_path=output_path,
-            sorries_filled=filled,
-            sorries_total=sorry_count,
-            message=final_message,
-            poll_count=0,
-        )
+        with _mock_lock:
+            _mock_file_projects[project_id] = _MockFileProjectData(
+                status=final_status,
+                output_path=output_path,
+                sorries_filled=filled,
+                sorries_total=sorry_count,
+                message=final_message,
+                poll_count=0,
+            )
         return ProveFileResult(
             status="submitted",
             sorries_total=sorry_count,
@@ -283,44 +292,46 @@ def mock_check_prove_file(project_id: str) -> ProveFileResult:
     Returns:
         ProveFileResult with current status
     """
-    if project_id not in _mock_file_projects:
-        return ProveFileResult(
-            status="error",
-            project_id=project_id,
-            message=f"Unknown project ID: {project_id}",
-        )
+    with _mock_lock:
+        if project_id not in _mock_file_projects:
+            return ProveFileResult(
+                status="error",
+                project_id=project_id,
+                message=f"Unknown project ID: {project_id}",
+            )
 
-    project = _mock_file_projects[project_id]
-    project["poll_count"] += 1
+        project = _mock_file_projects[project_id]
+        project["poll_count"] += 1
+        poll_count = project["poll_count"]
 
-    # Simulate progression through statuses
-    if project["poll_count"] == 1:
-        return ProveFileResult(
-            status="queued",
-            sorries_total=project["sorries_total"],
-            project_id=project_id,
-            percent_complete=0,
-            message="Proof is queued, waiting to start",
-        )
-    elif project["poll_count"] == 2:
-        return ProveFileResult(
-            status="in_progress",
-            sorries_total=project["sorries_total"],
-            project_id=project_id,
-            percent_complete=50,
-            message="Proof is being computed (50% complete)",
-        )
-    else:
-        # Return final result
-        return ProveFileResult(
-            status=project["status"],
-            output_path=project["output_path"],
-            sorries_filled=project["sorries_filled"],
-            sorries_total=project["sorries_total"],
-            project_id=project_id,
-            percent_complete=100,
-            message=project["message"],
-        )
+        # Simulate progression through statuses
+        if poll_count == 1:
+            return ProveFileResult(
+                status="queued",
+                sorries_total=project["sorries_total"],
+                project_id=project_id,
+                percent_complete=0,
+                message="Proof is queued, waiting to start",
+            )
+        elif poll_count == 2:
+            return ProveFileResult(
+                status="in_progress",
+                sorries_total=project["sorries_total"],
+                project_id=project_id,
+                percent_complete=50,
+                message="Proof is being computed (50% complete)",
+            )
+        else:
+            # Return final result
+            return ProveFileResult(
+                status=project["status"],
+                output_path=project["output_path"],
+                sorries_filled=project["sorries_filled"],
+                sorries_total=project["sorries_total"],
+                project_id=project_id,
+                percent_complete=100,
+                message=project["message"],
+            )
 
 
 def mock_formalize(

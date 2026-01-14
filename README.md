@@ -51,13 +51,13 @@ Then restart your terminal or run `source ~/.zshrc`.
 ### Option 1: Command Line (Recommended)
 
 ```bash
-claude mcp add aristotle -e ARISTOTLE_API_KEY -- uvx --from git+https://github.com/septract/lean-aristotle-mcp aristotle-mcp
+claude mcp add aristotle -e ARISTOTLE_API_KEY=$ARISTOTLE_API_KEY -- uvx --from git+https://github.com/septract/lean-aristotle-mcp aristotle-mcp
 ```
 
 This registers the server with your API key from the environment. Use `--scope user` to make it available across all projects:
 
 ```bash
-claude mcp add aristotle --scope user -e ARISTOTLE_API_KEY -- uvx --from git+https://github.com/septract/lean-aristotle-mcp aristotle-mcp
+claude mcp add aristotle --scope user -e ARISTOTLE_API_KEY=$ARISTOTLE_API_KEY -- uvx --from git+https://github.com/septract/lean-aristotle-mcp aristotle-mcp
 ```
 
 ### Option 2: JSON Configuration
@@ -143,7 +143,7 @@ git clone https://github.com/septract/lean-aristotle-mcp.git
 cd lean-aristotle-mcp
 make venv
 source .venv/bin/activate
-make install-all  # Includes API and dev dependencies
+make install-dev  # Includes dev dependencies
 ```
 
 Run the development server:
@@ -177,7 +177,7 @@ This means `uv` isn't in Claude's PATH. On macOS, GUI applications don't always 
 Make sure you've:
 1. Added `export ARISTOTLE_API_KEY="..."` to your shell config
 2. Restarted your terminal
-3. Included the `-e ARISTOTLE_API_KEY` flag when adding the server
+3. Included `-e ARISTOTLE_API_KEY=$ARISTOTLE_API_KEY` when adding the server
 
 ## License
 

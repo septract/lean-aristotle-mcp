@@ -199,3 +199,69 @@ class TestFormalizeEdgeCases:
 
         # Should succeed (mock replaces sorry with trivial for generic)
         assert result.status == "proved"
+
+
+class TestInputSizeLimits:
+    """Tests for input size validation."""
+
+    async def test_prove_code_size_limit(self) -> None:
+        """Code exceeding size limit returns error."""
+        from aristotle_mcp.tools import _MAX_CODE_SIZE
+
+        # Create code that exceeds the limit
+        line = "theorem t : True := by sorry\n"
+        huge_code = line * (_MAX_CODE_SIZE // len(line) + 100)
+        assert len(huge_code) > _MAX_CODE_SIZE
+
+        result = await prove(huge_code)
+
+        assert result.status == "error"
+        assert "size" in result.message.lower() or "exceeds" in result.message.lower()
+
+    async def test_prove_file_size_limit(self, tmp_path: Path) -> None:
+        """File exceeding size limit returns error."""
+        from aristotle_mcp.tools import _MAX_FILE_SIZE
+
+        # Create a file that exceeds the limit
+        huge_file = tmp_path / "huge.lean"
+        # Write in chunks to avoid memory issues
+        with open(huge_file, "w") as f:
+            chunk = "theorem t : True := by sorry\n" * 10000
+            bytes_written = 0
+            while bytes_written < _MAX_FILE_SIZE + 1000:
+                f.write(chunk)
+                bytes_written += len(chunk)
+
+        result = await prove_file(str(huge_file))
+
+        assert result.status == "error"
+        assert "size" in result.message.lower() or "exceeds" in result.message.lower()
+
+    async def test_formalize_description_size_limit(self) -> None:
+        """Description exceeding size limit returns error."""
+        from aristotle_mcp.tools import _MAX_DESCRIPTION_SIZE
+
+        # Create description that exceeds the limit
+        huge_description = "Prove that " * (_MAX_DESCRIPTION_SIZE // 10 + 1)
+        assert len(huge_description) > _MAX_DESCRIPTION_SIZE
+
+        result = await formalize(huge_description)
+
+        assert result.status == "error"
+        assert "size" in result.message.lower() or "exceeds" in result.message.lower()
+
+    async def test_prove_within_size_limit(self) -> None:
+        """Code within size limit is accepted."""
+        code = "theorem t : True := by sorry"
+        result = await prove(code)
+
+        # Should not fail due to size
+        assert result.status != "error" or "size" not in result.message.lower()
+
+    async def test_formalize_within_size_limit(self) -> None:
+        """Description within size limit is accepted."""
+        description = "The sum of two even numbers is even"
+        result = await formalize(description)
+
+        # Should not fail due to size
+        assert result.status != "error" or "size" not in result.message.lower()

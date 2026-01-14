@@ -25,8 +25,6 @@ The project uses a Makefile that auto-detects the `.venv` virtual environment. R
 ```bash
 make venv          # Create virtual environment
 make install-dev   # Install with dev dependencies (ruff, mypy, pytest)
-make install-api   # Install with Aristotle API support
-make install-all   # Install everything (dev + api)
 ```
 
 ### Code Quality
