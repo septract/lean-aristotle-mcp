@@ -23,7 +23,14 @@ mcp: FastMCP[None] = FastMCP(
     name="aristotle-mcp",
     instructions=(
         "Aristotle theorem prover for Lean 4. Use 'prove' to fill in sorry statements, "
-        "'prove_file' for file-based proving, and 'formalize' to convert natural language to Lean."
+        "'prove_file' for file-based proving, and 'formalize' to convert natural language "
+        "to Lean.\n\n"
+        "IMPORTANT: Proofs can take several minutes to complete. When using wait=False for "
+        "async operations, do NOT actively poll in a tight loop. Instead, inform the user "
+        "that the proof is running and either: (1) continue with other work and check back "
+        "later, or (2) ask the user when they'd like to check the status. Polling every few "
+        "seconds wastes resources and provides no benefit since proofs typically take 1-5 "
+        "minutes."
     ),
 )
 
@@ -64,6 +71,9 @@ async def check_proof_tool(project_id: str) -> ResultDict:
     """Check the status of a previously submitted proof.
 
     Use this tool to poll for results after calling prove with wait=False.
+
+    IMPORTANT: Proofs typically take 1-5 minutes. Do not poll in a tight loop.
+    Check once, then continue with other work or ask the user before checking again.
 
     Args:
         project_id: The project ID returned from prove(wait=False)
@@ -114,6 +124,9 @@ async def check_prove_file_tool(
     """Check the status of a previously submitted file proof.
 
     Use this tool to poll for results after calling prove_file with wait=False.
+
+    IMPORTANT: Proofs typically take 1-5 minutes. Do not poll in a tight loop.
+    Check once, then continue with other work or ask the user before checking again.
 
     Args:
         project_id: The project ID returned from prove_file(wait=False)

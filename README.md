@@ -1,5 +1,7 @@
 # Aristotle MCP Server
 
+> **Note:** This project was 100% vibe-coded with [Claude Code](https://claude.ai/code).
+
 An MCP (Model Context Protocol) server that wraps Harmonic's Aristotle theorem prover, enabling AI assistants to strategically invoke automated theorem proving during Lean 4 development.
 
 ## Features
