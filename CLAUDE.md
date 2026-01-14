@@ -61,6 +61,14 @@ make clean         # Remove build artifacts
 make clean-all     # Remove all generated files (build + test + lean artifacts)
 ```
 
+### CI
+
+```bash
+make ci            # Run CI locally with act (auto-starts colima)
+```
+
+Requires [act](https://github.com/nektos/act) and [colima](https://github.com/abiosoft/colima) for local Docker.
+
 ## Environment Configuration
 
 Copy `.env.example` to `.env` and set:
@@ -75,6 +83,7 @@ src/aristotle_mcp/
 ├── __main__.py     # Entry point for `python -m aristotle_mcp`
 ├── server.py       # MCP server setup using FastMCP, tool registration
 ├── tools.py        # Tool implementations (prove, prove_file, formalize, check_proof)
+├── models.py       # Shared result dataclasses (ProveResult, ProveFileResult, etc.)
 └── mock.py         # Mock responses for testing without API
 ```
 
@@ -96,8 +105,10 @@ src/aristotle_mcp/
 ```
 tests/
 ├── test_mock.py       # Mock mode tests (no API key needed)
-├── test_api.py        # Direct aristotlelib API tests
-├── test_api_tools.py  # Live API tool tests (skipped by default)
+├── test_helpers.py    # Unit tests for helper functions and models
+├── test_edge_cases.py # Edge case and error handling tests
+├── test_api.py        # Direct aristotlelib API tests (requires API key)
+├── test_api_tools.py  # Live API tool tests (requires API key)
 ├── fixtures/
 │   └── example.lean   # Test fixture with Lean code
 └── lean_project/      # Full Lean project for integration tests

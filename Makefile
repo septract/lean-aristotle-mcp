@@ -7,7 +7,8 @@
         test test-mock test-api test-all test-lean \
         run run-mock \
         build clean clean-all \
-        verify venv
+        verify venv \
+        ci
 
 # Default target
 .DEFAULT_GOAL := help
@@ -57,6 +58,9 @@ help: ## Show this help message
 	@echo ""
 	@echo "$(GREEN)Build:$(NC)"
 	@grep -E '^(build|clean[a-z-]*|verify):.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  $(YELLOW)%-18s$(NC) %s\n", $$1, $$2}'
+	@echo ""
+	@echo "$(GREEN)CI:$(NC)"
+	@grep -E '^(ci):.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  $(YELLOW)%-18s$(NC) %s\n", $$1, $$2}'
 
 #------------------------------------------------------------------------------
 # Installation
@@ -154,3 +158,14 @@ clean-all: clean ## Remove all generated files (build + test artifacts)
 verify: check test test-lean ## Full verification (lint + type-check + tests + lean)
 	@echo ""
 	@echo "$(GREEN)All checks passed!$(NC)"
+
+#------------------------------------------------------------------------------
+# CI (Local)
+#------------------------------------------------------------------------------
+
+ci: ## Run CI locally with act (requires colima)
+	@if ! colima status >/dev/null 2>&1; then \
+		echo "$(BLUE)Starting colima...$(NC)"; \
+		colima start; \
+	fi
+	act -j check
