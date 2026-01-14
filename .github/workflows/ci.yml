@@ -18,12 +18,19 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install uv
-        run: curl -LsSf https://astral.sh/uv/install.sh | sh
+      # Use official action on GitHub, curl install for act (local testing)
+      - name: Install uv (GitHub)
+        if: ${{ !env.ACT }}
+        uses: astral-sh/setup-uv@v4
+
+      - name: Install uv (act)
+        if: ${{ env.ACT }}
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
 
       - name: Install dependencies
         run: |
-          source $HOME/.local/bin/env
           uv venv
           uv pip install -e ".[dev]"
 
