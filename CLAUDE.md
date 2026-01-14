@@ -89,12 +89,16 @@ src/aristotle_mcp/
 
 **Key flow:** `server.py` creates a FastMCP server and registers tools that delegate to `tools.py`. Each tool function checks `is_mock_mode()` to decide whether to use mock responses or call the real Aristotle API via `aristotlelib`.
 
+**Async pattern:** Tools support `wait=False` for non-blocking operation. Async jobs store metadata (output paths, timestamps) for up to 30 days, allowing polling with `check_*` tools.
+
 ## MCP Tools Provided
 
-1. **`prove`** - Fill in `sorry` statements in Lean 4 code. Supports async mode with `wait=False` for long-running proofs.
-2. **`check_proof`** - Poll status of async proof submissions.
-3. **`prove_file`** - Prove all sorries in a Lean file with automatic import resolution.
-4. **`formalize`** - Convert natural language math to Lean 4 code.
+1. **`prove`** - Fill in `sorry` statements in Lean 4 code. Supports async mode with `wait=False`.
+2. **`check_proof`** - Poll status of async proof submissions from `prove`.
+3. **`prove_file`** - Prove all sorries in a Lean file with automatic import resolution. Supports async mode.
+4. **`check_prove_file`** - Poll status of async file proofs. Use `save=True` to write the solution file.
+5. **`formalize`** - Convert natural language math to Lean 4 code. Supports async mode with `wait=False`.
+6. **`check_formalize`** - Poll status of async formalization jobs.
 
 ## MCP Resources
 
@@ -124,4 +128,5 @@ Mock mode (`ARISTOTLE_MOCK=true`) simulates the Aristotle API for testing:
 - Code containing `timeout` or `hard` returns failed status
 - Files with `partial` in the filename return partial success
 - Files with `fail` in the filename return failed status
-- Async operations simulate queued → in_progress → complete flow
+- Async operations simulate queued → in_progress → complete flow over multiple polls
+- Formalize generates plausible Lean code based on keywords (even, prime, commutative)
