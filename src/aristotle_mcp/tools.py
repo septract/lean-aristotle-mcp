@@ -11,6 +11,7 @@ import time
 from dotenv import load_dotenv
 
 from aristotle_mcp.mock import (
+    mock_check_formalize,
     mock_check_proof,
     mock_check_prove_file,
     mock_formalize,
@@ -42,6 +43,7 @@ __all__ = [
     "prove_file",
     "check_prove_file",
     "formalize",
+    "check_formalize",
 ]
 
 
@@ -370,7 +372,7 @@ async def prove(
 
 
 async def check_proof(project_id: str) -> ProveResult:
-    """Check the status of a previously submitted proof.
+    """Poll for the status of a previously submitted proof.
 
     Args:
         project_id: The project ID returned from prove(wait=False)
@@ -566,7 +568,7 @@ async def prove_file(
 
 
 async def check_prove_file(project_id: str, output_path: str | None = None) -> ProveFileResult:
-    """Check the status of a previously submitted file proof.
+    """Poll for the status of a previously submitted file proof.
 
     Args:
         project_id: The project ID returned from prove_file(wait=False)
@@ -643,6 +645,7 @@ async def formalize(
     description: str,
     prove: bool = False,
     context_file: str | None = None,
+    wait: bool = True,
 ) -> FormalizeResult:
     """Convert natural language math to Lean 4 code.
 
@@ -651,9 +654,12 @@ async def formalize(
         prove: Whether to also prove the formalized statement
         context_file: Optional path to a Lean file providing definitions and context
                       for the formalization
+        wait: If True (default), block until complete. If False, submit
+              and return immediately with project_id for polling.
 
     Returns:
-        FormalizeResult with status and Lean code
+        FormalizeResult with status and Lean code.
+        If wait=False, returns status="submitted" with project_id for polling.
     """
     # Validate input size
     if len(description) > _MAX_DESCRIPTION_SIZE:
@@ -663,7 +669,7 @@ async def formalize(
         )
 
     if is_mock_mode():
-        return mock_formalize(description, prove, context_file)
+        return mock_formalize(description, prove, context_file, wait=wait)
 
     # Real API implementation
     if not has_api_key():
@@ -680,7 +686,7 @@ async def formalize(
             )
 
     try:
-        from aristotlelib import Project, ProjectInputType
+        from aristotlelib import Project, ProjectInputType, ProjectStatus
 
         # Create a temp file with the natural language description
         with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
@@ -688,13 +694,39 @@ async def formalize(
             temp_path = f.name
 
         try:
-            # Use informal input type for natural language (async)
+            # Use informal input type for natural language
             result_path = await Project.prove_from_file(
                 input_file_path=temp_path,
                 project_input_type=ProjectInputType.INFORMAL,
                 formal_input_context=canonical_context,
-                wait_for_completion=True,
+                wait_for_completion=wait,
             )
+
+            # For async mode, find the project_id for polling
+            if not wait:
+                projects, _ = await Project.list_projects(
+                    limit=5,
+                    status=[
+                        ProjectStatus.QUEUED,
+                        ProjectStatus.IN_PROGRESS,
+                        ProjectStatus.NOT_STARTED,
+                    ],
+                )
+
+                if not projects:
+                    return FormalizeResult(
+                        status="error",
+                        message="Could not find submitted project",
+                    )
+
+                project = projects[0]
+                project_id = str(project.project_id)
+
+                return FormalizeResult(
+                    status="submitted",
+                    project_id=project_id,
+                    message="Formalization submitted. Use check_formalize to poll for results.",
+                )
 
             if result_path and os.path.exists(result_path):
                 with open(result_path) as f:
@@ -715,10 +747,86 @@ async def formalize(
                     message="Could not formalize the statement",
                 )
         finally:
-            os.unlink(temp_path)
+            if wait:
+                # Only delete temp file in sync mode; async needs it until completion
+                os.unlink(temp_path)
 
     except Exception as e:
         return FormalizeResult(
             status="error",
+            message=_sanitize_api_error(e),
+        )
+
+
+async def check_formalize(project_id: str) -> FormalizeResult:
+    """Poll for the status of a previously submitted formalization.
+
+    Args:
+        project_id: The project ID returned from formalize(wait=False)
+
+    Returns:
+        FormalizeResult with current status. If complete, includes the Lean code.
+    """
+    if is_mock_mode():
+        return mock_check_formalize(project_id)
+
+    if not has_api_key():
+        return FormalizeResult(status="error", message=_API_KEY_ERROR)
+
+    try:
+        from aristotlelib import Project
+
+        # Load existing project
+        project = await Project.from_id(project_id)
+        await project.refresh()
+
+        # Get status name from enum
+        status_str = (
+            project.status.name if hasattr(project.status, "name") else str(project.status).upper()
+        )
+        pct = project.percent_complete
+
+        # Map API status to our status
+        our_status, message = _map_api_status(status_str, pct)
+
+        if our_status == "complete":
+            # Get the solution
+            with tempfile.NamedTemporaryFile(mode="w", suffix=".lean", delete=False) as f:
+                output_path = f.name
+
+            try:
+                solution_path = await project.get_solution(output_path=output_path)
+                if solution_path and os.path.exists(solution_path):
+                    with open(solution_path) as f:
+                        lean_code = f.read()
+                    return FormalizeResult(
+                        status="formalized",
+                        lean_code=lean_code,
+                        project_id=project_id,
+                        percent_complete=100,
+                        message="Formalization completed successfully",
+                    )
+            finally:
+                if os.path.exists(output_path):
+                    os.unlink(output_path)
+
+            return FormalizeResult(
+                status="failed",
+                project_id=project_id,
+                percent_complete=pct,
+                message="Completed but no result available",
+            )
+
+        return FormalizeResult(
+            status=our_status,
+            project_id=project_id,
+            percent_complete=pct if our_status != "queued" else 0,
+            message=message,
+        )
+
+    except Exception as e:
+        return FormalizeResult(
+            status="error",
+            project_id=project_id,
             message=_sanitize_api_error(e),
         )

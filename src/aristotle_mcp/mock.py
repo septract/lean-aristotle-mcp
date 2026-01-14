@@ -16,6 +16,7 @@ _mock_lock = threading.Lock()
 # Access must be protected by _mock_lock
 _mock_projects: dict[str, _MockProjectData] = {}
 _mock_file_projects: dict[str, _MockFileProjectData] = {}
+_mock_formalize_projects: dict[str, _MockFormalizeProjectData] = {}
 
 
 class _MockProjectData(TypedDict):
@@ -33,6 +34,15 @@ class _MockFileProjectData(TypedDict):
 
     status: str
     output_path: str | None
+    message: str
+    poll_count: int
+
+
+class _MockFormalizeProjectData(TypedDict):
+    """Internal storage for mock formalize jobs."""
+
+    status: str
+    lean_code: str | None
     message: str
     poll_count: int
 
@@ -297,22 +307,15 @@ def mock_check_prove_file(project_id: str) -> ProveFileResult:
             )
 
 
-def mock_formalize(
+def _generate_mock_lean_code(
     description: str,
-    prove: bool = False,
-    context_file: str | None = None,
-) -> FormalizeResult:
-    """Mock implementation of formalize.
-
-    Generates plausible Lean code from natural language descriptions.
-
-    Args:
-        description: Natural language description of the theorem
-        prove: Whether to also prove the formalized statement
-        context_file: Optional Lean file providing context definitions
+    prove: bool,
+    context_file: str | None,
+) -> tuple[str, str, str]:
+    """Generate mock Lean code based on description keywords.
 
     Returns:
-        FormalizeResult with status and Lean code
+        Tuple of (lean_code, status, message)
     """
     # Add context import if provided
     context_header = ""
@@ -372,4 +375,106 @@ theorem statement : True := by
     if context_file:
         message += f" (using context from {context_file})"
 
-    return FormalizeResult(status=status, lean_code=lean_code, message=message)
+    return lean_code, status, message
+
+
+def mock_formalize(
+    description: str,
+    prove: bool = False,
+    context_file: str | None = None,
+    wait: bool = True,
+) -> FormalizeResult:
+    """Mock implementation of formalize.
+
+    Generates plausible Lean code from natural language descriptions.
+
+    Args:
+        description: Natural language description of the theorem
+        prove: Whether to also prove the formalized statement
+        context_file: Optional Lean file providing context definitions
+        wait: If True, return result immediately. If False, return project_id for polling.
+
+    Returns:
+        FormalizeResult with status and Lean code
+    """
+    lean_code, final_status, final_message = _generate_mock_lean_code(
+        description, prove, context_file
+    )
+
+    # Generate project ID
+    project_id = f"mock-formalize-{uuid.uuid4()}"
+
+    # If not waiting, store the job and return immediately (thread-safe)
+    if not wait:
+        with _mock_lock:
+            _mock_formalize_projects[project_id] = _MockFormalizeProjectData(
+                status=final_status,
+                lean_code=lean_code,
+                message=final_message,
+                poll_count=0,
+            )
+        return FormalizeResult(
+            status="submitted",
+            project_id=project_id,
+            message="Formalization submitted. Use check_formalize to poll for results.",
+        )
+
+    # Waiting - return final result immediately
+    return FormalizeResult(
+        status=final_status,
+        lean_code=lean_code,
+        project_id=project_id,
+        message=final_message,
+    )
+
+
+def mock_check_formalize(project_id: str) -> FormalizeResult:
+    """Mock implementation of check_formalize.
+
+    Simulates async polling for formalization jobs:
+    - First call: returns "queued"
+    - Second call: returns "in_progress"
+    - Third+ calls: returns the final result
+
+    Args:
+        project_id: The mock project ID to check
+
+    Returns:
+        FormalizeResult with current status
+    """
+    with _mock_lock:
+        if project_id not in _mock_formalize_projects:
+            return FormalizeResult(
+                status="error",
+                project_id=project_id,
+                message=f"Unknown project ID: {project_id}",
+            )
+
+        project = _mock_formalize_projects[project_id]
+        project["poll_count"] += 1
+        poll_count = project["poll_count"]
+
+        # Simulate progression through statuses
+        if poll_count == 1:
+            return FormalizeResult(
+                status="queued",
+                project_id=project_id,
+                percent_complete=0,
+                message="Formalization is queued, waiting to start",
+            )
+        elif poll_count == 2:
+            return FormalizeResult(
+                status="in_progress",
+                project_id=project_id,
+                percent_complete=50,
+                message="Formalization is being computed (50% complete)",
+            )
+        else:
+            # Return final result
+            return FormalizeResult(
+                status=project["status"],
+                lean_code=project["lean_code"],
+                project_id=project_id,
+                percent_complete=100,
+                message=project["message"],
+            )

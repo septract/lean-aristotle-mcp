@@ -209,3 +209,61 @@ async def test_formalize_with_context(example_lean_file: Path) -> None:
     assert result.lean_code is not None
     assert "example" in result.lean_code.lower()  # Should reference the context file
     assert "context" in result.message.lower()
+
+
+async def test_formalize_async() -> None:
+    """Test async formalization with polling."""
+    from aristotle_mcp.tools import check_formalize
+
+    # Submit without waiting
+    result = await formalize("The sum of two even numbers is even", wait=False)
+    assert result.status == "submitted"
+    assert result.project_id is not None
+
+    project_id = result.project_id
+
+    # First poll - queued
+    result = await check_formalize(project_id)
+    assert result.status == "queued"
+    assert result.percent_complete == 0
+
+    # Second poll - in_progress
+    result = await check_formalize(project_id)
+    assert result.status == "in_progress"
+    assert result.percent_complete == 50
+
+    # Third poll - complete
+    result = await check_formalize(project_id)
+    assert result.status == "formalized"
+    assert result.percent_complete == 100
+    assert result.lean_code is not None
+
+
+async def test_formalize_async_with_prove() -> None:
+    """Test async formalization with prove=True."""
+    from aristotle_mcp.tools import check_formalize
+
+    # Submit with prove=True
+    result = await formalize("addition is commutative", prove=True, wait=False)
+    assert result.status == "submitted"
+    assert result.project_id is not None
+
+    project_id = result.project_id
+
+    # Poll until complete
+    for _ in range(5):
+        result = await check_formalize(project_id)
+        if result.status == "proved":
+            break
+
+    assert result.status == "proved"
+    assert result.lean_code is not None
+
+
+async def test_check_formalize_unknown_project() -> None:
+    """Test check_formalize with unknown project ID."""
+    from aristotle_mcp.tools import check_formalize
+
+    result = await check_formalize("nonexistent-project-id")
+    assert result.status == "error"
+    assert "unknown" in result.message.lower()

@@ -63,8 +63,10 @@ class ProveFileResult:
 class FormalizeResult:
     """Result from a formalize operation."""
 
-    status: str  # formalized | proved | failed | error
+    status: str  # formalized | proved | failed | error | submitted | in_progress | queued
     lean_code: str | None = None
+    project_id: str | None = None
+    percent_complete: int | None = None
     message: str = ""
 
     def to_dict(self) -> ResultDict:
@@ -72,4 +74,8 @@ class FormalizeResult:
         result: ResultDict = {"status": self.status, "message": self.message}
         if self.lean_code is not None:
             result["lean_code"] = self.lean_code
+        if self.project_id is not None:
+            result["project_id"] = self.project_id
+        if self.percent_complete is not None:
+            result["percent_complete"] = self.percent_complete
         return result

@@ -16,9 +16,10 @@ To use this MCP server, you'll need an API key from [aristotle.harmonic.fun](htt
 |------|-------------|
 | `prove` | Fill in `sorry` statements in Lean code snippets |
 | `prove_file` | Prove all sorries in a Lean file with automatic import resolution |
+| `formalize` | Convert natural language math to Lean 4 code |
 | `check_proof` | Poll async proof jobs for completion |
 | `check_prove_file` | Poll async file proof jobs for completion |
-| `formalize` | Convert natural language math to Lean 4 code |
+| `check_formalize` | Poll async formalization jobs for completion |
 
 ## Installation
 

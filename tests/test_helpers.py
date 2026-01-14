@@ -232,6 +232,26 @@ class TestFormalizeResultToDict:
         d = result.to_dict()
         assert d["lean_code"] == "theorem x : True := trivial"
 
+    def test_with_project_id(self) -> None:
+        """Result with project_id (async submission)."""
+        result = FormalizeResult(
+            status="submitted",
+            project_id="abc-123",
+            message="Submitted",
+        )
+        d = result.to_dict()
+        assert d["project_id"] == "abc-123"
+
+    def test_with_percent_complete(self) -> None:
+        """Result with percent_complete (async polling)."""
+        result = FormalizeResult(
+            status="in_progress",
+            percent_complete=50,
+            message="Working",
+        )
+        d = result.to_dict()
+        assert d["percent_complete"] == 50
+
 
 class TestCanonicalizePath:
     """Tests for _canonicalize_path helper."""

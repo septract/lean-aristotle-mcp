@@ -9,6 +9,7 @@ from mcp.server import FastMCP
 
 from aristotle_mcp.models import ResultDict
 from aristotle_mcp.tools import (
+    check_formalize,
     check_proof,
     check_prove_file,
     formalize,
@@ -68,12 +69,12 @@ async def prove_tool(
 
 @mcp.tool(name="check_proof")
 async def check_proof_tool(project_id: str) -> ResultDict:
-    """Check the status of a previously submitted proof.
+    """Poll for the status of a previously submitted proof.
 
     Use this tool to poll for results after calling prove with wait=False.
 
     IMPORTANT: Proofs typically take 1-5 minutes. Do not poll in a tight loop.
-    Check once, then continue with other work or ask the user before checking again.
+    Poll once, then continue with other work or ask the user before polling again.
 
     Args:
         project_id: The project ID returned from prove(wait=False)
@@ -109,8 +110,8 @@ async def prove_file_tool(
               and return immediately with project_id for polling.
 
     Returns:
-        JSON with status, output_path, sorries_filled, sorries_total, and message.
-        If wait=False, returns status="submitted" with project_id for check_prove_file.
+        JSON with status, output_path, and message.
+        If wait=False, returns status="submitted" with project_id for polling.
     """
     result = await prove_file(file_path=file_path, output_path=output_path, wait=wait)
     return result.to_dict()
@@ -121,12 +122,12 @@ async def check_prove_file_tool(
     project_id: str,
     output_path: str | None = None,
 ) -> ResultDict:
-    """Check the status of a previously submitted file proof.
+    """Poll for the status of a previously submitted file proof.
 
     Use this tool to poll for results after calling prove_file with wait=False.
 
     IMPORTANT: Proofs typically take 1-5 minutes. Do not poll in a tight loop.
-    Check once, then continue with other work or ask the user before checking again.
+    Poll once, then continue with other work or ask the user before polling again.
 
     Args:
         project_id: The project ID returned from prove_file(wait=False)
@@ -136,7 +137,6 @@ async def check_prove_file_tool(
         JSON with current status and progress. Fields:
         - status: "queued" | "in_progress" | "proved" | "partial" | "failed" | "error"
         - percent_complete: 0-100 progress indicator
-        - sorries_filled/sorries_total: Proof progress counts (when complete)
         - output_path: Path to solution file (when complete)
         - message: Human-readable status description
     """
@@ -149,6 +149,7 @@ async def formalize_tool(
     description: str,
     prove: bool = False,
     context_file: str | None = None,
+    wait: bool = True,
 ) -> ResultDict:
     """Convert a natural language mathematical statement into Lean 4 code.
 
@@ -162,11 +163,39 @@ async def formalize_tool(
         context_file: Optional path to a Lean file providing definitions and
                       context for the formalization. Use this when your description
                       refers to custom types or definitions.
+        wait: If True (default), block until complete. If False, submit
+              and return immediately with project_id for polling.
 
     Returns:
-        JSON with status (formalized/proved/failed/error), lean_code, and message
+        JSON with status (formalized/proved/failed/error), lean_code, and message.
+        If wait=False, returns status="submitted" with project_id for polling.
     """
-    result = await formalize(description=description, prove=prove, context_file=context_file)
+    result = await formalize(
+        description=description, prove=prove, context_file=context_file, wait=wait
+    )
+    return result.to_dict()
+
+
+@mcp.tool(name="check_formalize")
+async def check_formalize_tool(project_id: str) -> ResultDict:
+    """Poll for the status of a previously submitted formalization.
+
+    Use this tool to poll for results after calling formalize with wait=False.
+
+    IMPORTANT: Formalization typically takes 1-5 minutes. Do not poll in a tight loop.
+    Poll once, then continue with other work or ask the user before polling again.
+
+    Args:
+        project_id: The project ID returned from formalize(wait=False)
+
+    Returns:
+        JSON with current status and progress. Fields:
+        - status: "queued" | "in_progress" | "formalized" | "proved" | "failed" | "error"
+        - percent_complete: 0-100 progress indicator
+        - lean_code: The formalized Lean code (when complete)
+        - message: Human-readable status description
+    """
+    result = await check_formalize(project_id=project_id)
     return result.to_dict()
 
 
