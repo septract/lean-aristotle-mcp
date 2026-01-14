@@ -16,10 +16,25 @@ The `prove` tool handles code snippets but isn't file-aware. Could add:
 - Would need to parse Lean file and extract the theorem with its context
 - Useful when you only want to prove one thing without waiting for the whole file
 
+### Async support for formalize
+Currently `formalize` is sync-only while `prove` and `prove_file` support async mode.
+- Add `wait: bool = True` parameter to `formalize`
+- Add `check_formalize` tool for polling async formalization jobs
+- Especially useful when `prove=True` since proving can take minutes
+- Would make the API consistent across all tools
+
 ### Cancel queued jobs
 Would be nice to cancel a proof that's queued if you realize you made a mistake.
 - **Blocked**: aristotlelib API doesn't currently support cancellation
 - Revisit if API adds this capability
+
+## Documentation
+
+### Clarify "check" vs "poll" terminology
+The `check_proof` and `check_prove_file` tools are really polling operations for async jobs. Documentation should consistently use "poll" terminology to make this clearer:
+- Tool descriptions should say "Poll for async proof status" not "Check status"
+- README and docstrings should emphasize these are for polling async submissions
+- Consider renaming tools to `poll_proof` / `poll_prove_file` in a future breaking change
 
 ## Installation / Configuration
 
