@@ -135,6 +135,41 @@ Or set in your configuration:
 - **Lean 4 only:** Aristotle works with Lean 4, not Lean 3 or earlier versions.
 - **Mathlib support:** File-based proving automatically resolves Lake dependencies including Mathlib.
 
+## Async Workflow
+
+All proving tools support synchronous (`wait=True`, default) and asynchronous (`wait=False`) modes.
+
+### Synchronous Mode (Simple)
+```
+prove(code, wait=True)        → Returns filled proof when complete
+prove_file(file, wait=True)   → Writes solution file when complete
+formalize(desc, wait=True)    → Returns Lean code when complete
+```
+
+### Asynchronous Mode (Non-blocking)
+
+Use async mode for long-running proofs to avoid blocking:
+
+```
+1. Submit:    prove_file(file, wait=False)     → Returns project_id
+2. Poll:      check_prove_file(project_id)     → Returns status (save=False by default)
+3. Save:      check_prove_file(project_id, output_path="out.lean", save=True)
+```
+
+**Key points:**
+- `check_prove_file` defaults to `save=False` — it only checks status without writing files
+- To save the result, call with `save=True`
+- If `output_path` is omitted, uses the path from the original `prove_file` call (stored for 30 days)
+- You can override `output_path` to save to a different location
+- `check_proof` and `check_formalize` return the code directly in the response (no `save` parameter needed)
+
+## Context Files
+
+- **`prove`** accepts `context_files` (a list) — multiple Lean files can provide imports
+- **`formalize`** accepts `context_file` (singular) — only one context file supported
+
+This difference reflects the underlying [aristotlelib](https://pypi.org/project/aristotlelib/) API.
+
 ## Local Development
 
 Clone the repository and install in editable mode:

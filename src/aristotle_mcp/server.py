@@ -54,7 +54,8 @@ async def prove_tool(
 
     Args:
         code: Lean 4 code containing `sorry` statements to prove
-        context_files: Optional paths to additional Lean files for imports
+        context_files: Optional list of paths to Lean files to use as imports.
+                       These files provide definitions and lemmas the proof can reference.
         hint: Optional natural language hint to guide the prover
         wait: If True (default), block until proof completes. If False, submit
               the proof and return immediately with a project_id for polling.
@@ -121,6 +122,7 @@ async def prove_file_tool(
 async def check_prove_file_tool(
     project_id: str,
     output_path: str | None = None,
+    save: bool = False,
 ) -> ResultDict:
     """Poll for the status of a previously submitted file proof.
 
@@ -131,16 +133,19 @@ async def check_prove_file_tool(
 
     Args:
         project_id: The project ID returned from prove_file(wait=False)
-        output_path: Where to write the solution when complete (optional)
+        output_path: Where to write the solution. If not provided, uses the path
+                     from the original prove_file call (stored for up to 30 days).
+        save: If False (default), only check status without writing the solution file.
+              If True, write the solution file to output_path when complete.
 
     Returns:
         JSON with current status and progress. Fields:
         - status: "queued" | "in_progress" | "proved" | "partial" | "failed" | "error"
         - percent_complete: 0-100 progress indicator
-        - output_path: Path to solution file (when complete)
+        - output_path: Path to solution file (when save=True and complete)
         - message: Human-readable status description
     """
-    result = await check_prove_file(project_id=project_id, output_path=output_path)
+    result = await check_prove_file(project_id=project_id, output_path=output_path, save=save)
     return result.to_dict()
 
 
@@ -160,9 +165,10 @@ async def formalize_tool(
     Args:
         description: Natural language math statement or problem
         prove: Also attempt to prove the formalized statement (default: false)
-        context_file: Optional path to a Lean file providing definitions and
-                      context for the formalization. Use this when your description
-                      refers to custom types or definitions.
+        context_file: Optional path to a single Lean file providing definitions
+                      for the formalization. Use when your description references
+                      custom types or definitions. (Note: unlike prove's context_files,
+                      this accepts only one file per the underlying API.)
         wait: If True (default), block until complete. If False, submit
               and return immediately with project_id for polling.
 

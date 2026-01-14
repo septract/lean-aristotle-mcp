@@ -58,8 +58,8 @@ _metadata_lock = threading.Lock()
 # Access must be protected by _metadata_lock
 _async_job_metadata: dict[str, dict[str, str | int | float]] = {}
 
-# Cleanup jobs older than 1 hour
-_METADATA_TTL_SECONDS = 3600
+# Cleanup jobs older than 30 days (memory impact is negligible)
+_METADATA_TTL_SECONDS = 30 * 24 * 60 * 60  # 2,592,000 seconds
 
 # Input size limits (defense-in-depth)
 _MAX_CODE_SIZE = 1_000_000  # 1MB for code input
@@ -263,7 +263,8 @@ async def prove(
 
     Args:
         code: Lean 4 code containing `sorry` statements
-        context_files: Optional paths to additional Lean files for imports
+        context_files: Optional list of paths to Lean files to use as imports.
+                       These files provide definitions and lemmas the proof can reference.
         hint: Optional natural language hint to guide the prover
         wait: If True, block until proof completes. If False, return immediately
               with a project_id that can be polled with check_proof.
@@ -567,18 +568,25 @@ async def prove_file(
         )
 
 
-async def check_prove_file(project_id: str, output_path: str | None = None) -> ProveFileResult:
+async def check_prove_file(
+    project_id: str,
+    output_path: str | None = None,
+    save: bool = False,
+) -> ProveFileResult:
     """Poll for the status of a previously submitted file proof.
 
     Args:
         project_id: The project ID returned from prove_file(wait=False)
-        output_path: Where to write solution when complete (optional)
+        output_path: Where to write the solution. If not provided, uses the path
+                     from the original prove_file call (stored for up to 30 days).
+        save: If False (default), only return status without writing the solution file.
+              If True, write the solution file to output_path when complete.
 
     Returns:
-        ProveFileResult with current status. If complete, includes output_path.
+        ProveFileResult with current status. If complete and save=True, includes output_path.
     """
     if is_mock_mode():
-        return mock_check_prove_file(project_id)
+        return mock_check_prove_file(project_id, output_path=output_path, save=save)
 
     if not has_api_key():
         return ProveFileResult(status="error", message=_API_KEY_ERROR)
@@ -609,22 +617,37 @@ async def check_prove_file(project_id: str, output_path: str | None = None) -> P
         our_status, message = _map_api_status(status_str, pct)
 
         if our_status == "complete":
+            # If save=False, just return status without writing the file
+            if not save:
+                return ProveFileResult(
+                    status="proved",
+                    project_id=project_id,
+                    percent_complete=100,
+                    message="Proof complete. Call again with save=True to write the solution.",
+                )
+
+            # Require output_path when saving (stored path may have expired)
+            if not output_path:
+                return ProveFileResult(
+                    status="error",
+                    project_id=project_id,
+                    percent_complete=100,
+                    message="Proof complete but output_path required to save.",
+                )
+
             # Find a unique path to avoid overwriting existing files
-            safe_output_path = _find_unique_path(output_path) if output_path else None
+            safe_output_path = _find_unique_path(output_path)
 
             # Get the solution
             solution_path = await project.get_solution(output_path=safe_output_path)
 
-            # Clean up metadata now that job is complete (thread-safe)
-            with _metadata_lock:
-                _async_job_metadata.pop(project_id, None)
+            # Note: metadata is NOT cleared here - TTL cleanup handles it.
+            # This allows saving to multiple paths if needed.
 
             return _analyze_solution_file(str(solution_path), project_id)
 
-        elif our_status == "failed":
-            # Clean up metadata for failed jobs (thread-safe)
-            with _metadata_lock:
-                _async_job_metadata.pop(project_id, None)
+        # Note: metadata cleanup is handled by TTL (_cleanup_stale_metadata),
+        # not on completion/failure. This keeps the interface simpler.
 
         return ProveFileResult(
             status=our_status,
@@ -652,8 +675,9 @@ async def formalize(
     Args:
         description: Natural language math statement or problem
         prove: Whether to also prove the formalized statement
-        context_file: Optional path to a Lean file providing definitions and context
-                      for the formalization
+        context_file: Optional path to a single Lean file providing definitions
+                      for the formalization. (Note: unlike prove's context_files,
+                      this accepts only one file per the underlying API.)
         wait: If True (default), block until complete. If False, submit
               and return immediately with project_id for polling.
 

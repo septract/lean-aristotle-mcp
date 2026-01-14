@@ -255,7 +255,11 @@ def mock_prove_file(
     )
 
 
-def mock_check_prove_file(project_id: str) -> ProveFileResult:
+def mock_check_prove_file(
+    project_id: str,
+    output_path: str | None = None,
+    save: bool = False,
+) -> ProveFileResult:
     """Mock implementation of check_prove_file.
 
     Simulates async polling for file proofs:
@@ -265,6 +269,10 @@ def mock_check_prove_file(project_id: str) -> ProveFileResult:
 
     Args:
         project_id: The mock project ID to check
+        output_path: Override the output path from original prove_file call.
+                     If provided and save=True, uses this path instead.
+        save: If False (default), just return status without writing the solution file.
+              If True, include output_path when complete.
 
     Returns:
         ProveFileResult with current status
@@ -298,13 +306,27 @@ def mock_check_prove_file(project_id: str) -> ProveFileResult:
             )
         else:
             # Return final result
-            return ProveFileResult(
-                status=project["status"],
-                output_path=project["output_path"],
-                project_id=project_id,
-                percent_complete=100,
-                message=project["message"],
-            )
+            if save:
+                # Use provided output_path or fall back to stored path
+                final_output_path = output_path or project["output_path"]
+                return ProveFileResult(
+                    status=project["status"],
+                    output_path=final_output_path,
+                    project_id=project_id,
+                    percent_complete=100,
+                    message=project["message"],
+                )
+            else:
+                # Don't include output_path when save=False
+                message = project["message"]
+                if project["status"] == "proved":
+                    message = "Proof complete. Call again with save=True to write the solution."
+                return ProveFileResult(
+                    status=project["status"],
+                    project_id=project_id,
+                    percent_complete=100,
+                    message=message,
+                )
 
 
 def _generate_mock_lean_code(
