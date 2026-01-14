@@ -122,5 +122,6 @@ tests/
 Mock mode (`ARISTOTLE_MOCK=true`) simulates the Aristotle API for testing:
 - Code containing `false_theorem` or `bad_lemma` returns counterexamples
 - Code containing `timeout` or `hard` returns failed status
-- Files with >5 sorries return partial success
+- Files with `partial` in the filename return partial success
+- Files with `fail` in the filename return failed status
 - Async operations simulate queued → in_progress → complete flow

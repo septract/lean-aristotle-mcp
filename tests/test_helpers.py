@@ -8,45 +8,10 @@ import pytest
 from aristotle_mcp.models import FormalizeResult, ProveFileResult, ProveResult
 from aristotle_mcp.tools import (
     _canonicalize_path,
-    _count_sorries,
     _find_unique_path,
     _map_api_status,
     _sanitize_api_error,
 )
-
-
-class TestCountSorries:
-    """Tests for _count_sorries helper."""
-
-    def test_no_sorries(self) -> None:
-        """Text with no sorry statements."""
-        assert _count_sorries("theorem foo : True := trivial") == 0
-
-    def test_single_sorry(self) -> None:
-        """Text with one sorry."""
-        assert _count_sorries("theorem foo : True := by sorry") == 1
-
-    def test_multiple_sorries(self) -> None:
-        """Text with multiple sorry statements."""
-        code = """
-        theorem a : True := by sorry
-        theorem b : False := by sorry
-        theorem c : 1 = 1 := by sorry
-        """
-        assert _count_sorries(code) == 3
-
-    def test_sorry_word_boundary(self) -> None:
-        """Should not match 'sorry' as part of another word."""
-        # "sorryExample" should not count
-        assert _count_sorries("def sorryExample := 1") == 0
-        # "notsorry" should not count
-        assert _count_sorries("-- notsorry comment") == 0
-        # But "sorry" alone should count
-        assert _count_sorries("-- sorry") == 1
-
-    def test_sorry_in_comment(self) -> None:
-        """Sorry in comments still counts (matches real behavior)."""
-        assert _count_sorries("-- TODO: sorry") == 1
 
 
 class TestFindUniquePath:
@@ -215,20 +180,7 @@ class TestProveFileResultToDict:
         result = ProveFileResult(status="proved", message="Done")
         d = result.to_dict()
         assert d["status"] == "proved"
-        assert d["sorries_filled"] == 0
-        assert d["sorries_total"] == 0
-
-    def test_with_counts(self) -> None:
-        """Result with sorry counts."""
-        result = ProveFileResult(
-            status="partial",
-            sorries_filled=3,
-            sorries_total=5,
-            message="Partial",
-        )
-        d = result.to_dict()
-        assert d["sorries_filled"] == 3
-        assert d["sorries_total"] == 5
+        assert d["message"] == "Done"
 
     def test_with_output_path(self) -> None:
         """Result with output_path."""
@@ -239,6 +191,26 @@ class TestProveFileResultToDict:
         )
         d = result.to_dict()
         assert d["output_path"] == "/tmp/out.lean"
+
+    def test_with_project_id(self) -> None:
+        """Result with project_id."""
+        result = ProveFileResult(
+            status="submitted",
+            project_id="abc-123",
+            message="Submitted",
+        )
+        d = result.to_dict()
+        assert d["project_id"] == "abc-123"
+
+    def test_with_percent_complete(self) -> None:
+        """Result with percent_complete."""
+        result = ProveFileResult(
+            status="in_progress",
+            percent_complete=50,
+            message="Working",
+        )
+        d = result.to_dict()
+        assert d["percent_complete"] == 50
 
 
 class TestFormalizeResultToDict:

@@ -40,8 +40,6 @@ class ProveFileResult:
 
     status: str  # proved | partial | failed | error | submitted | in_progress | queued
     output_path: str | None = None
-    sorries_filled: int = 0
-    sorries_total: int = 0
     project_id: str | None = None
     percent_complete: int | None = None
     message: str = ""
@@ -50,8 +48,6 @@ class ProveFileResult:
         """Convert to dictionary for JSON serialization."""
         result: ResultDict = {
             "status": self.status,
-            "sorries_filled": self.sorries_filled,
-            "sorries_total": self.sorries_total,
             "message": self.message,
         }
         if self.output_path is not None:

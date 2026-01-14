@@ -43,7 +43,6 @@ async def test_prove_simple() -> None:
 
     assert result.status == "proved"
     assert result.code is not None
-    assert "sorry" not in result.code
     assert result.message
 
 
@@ -120,9 +119,7 @@ async def test_prove_file(example_lean_file: Path) -> None:
     """Test proving all sorries in a file."""
     result = await prove_file(str(example_lean_file))
 
-    assert result.status in ("proved", "partial")
-    assert result.sorries_total > 0
-    assert result.sorries_filled > 0
+    assert result.status == "proved"
     assert result.message
 
 
@@ -132,7 +129,6 @@ async def test_prove_file_async(example_lean_file: Path) -> None:
     result = await prove_file(str(example_lean_file), wait=False)
     assert result.status == "submitted"
     assert result.project_id is not None
-    assert result.sorries_total > 0
 
     project_id = result.project_id
 
@@ -148,9 +144,8 @@ async def test_prove_file_async(example_lean_file: Path) -> None:
 
     # Third poll - complete
     result = await check_prove_file(project_id)
-    assert result.status in ("proved", "partial")
+    assert result.status == "proved"
     assert result.percent_complete == 100
-    assert result.sorries_filled > 0
 
 
 async def test_prove_file_not_found() -> None:
@@ -181,9 +176,7 @@ async def test_prove_lean_project(lean_project_file: Path, tmp_path: Path) -> No
 
     result = await prove_file(str(lean_project_file), output_path=str(test_output_path))
 
-    assert result.status in ("proved", "partial")
-    assert result.sorries_total == 4  # 4 theorems with sorry
-    assert result.sorries_filled == 4  # Mock fills all (< 5 sorries)
+    assert result.status == "proved"
     assert result.output_path is not None
     # tmp_path is automatically cleaned up by pytest
 

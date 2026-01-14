@@ -3,15 +3,11 @@
 from __future__ import annotations
 
 import os
-import re
 import threading
 import uuid
 from typing import TypedDict
 
 from aristotle_mcp.models import FormalizeResult, ProveFileResult, ProveResult
-
-# Regex for counting sorry statements (word boundary to avoid matching "sorryExample")
-_SORRY_PATTERN = re.compile(r"\bsorry\b")
 
 # Thread lock for accessing shared mock state
 _mock_lock = threading.Lock()
@@ -37,8 +33,6 @@ class _MockFileProjectData(TypedDict):
 
     status: str
     output_path: str | None
-    sorries_filled: int
-    sorries_total: int
     message: str
     poll_count: int
 
@@ -54,7 +48,7 @@ def mock_prove(
     Provides realistic responses based on the input:
     - If code contains 'false_theorem' or 'bad_lemma': returns counterexample
     - If code contains 'timeout' or 'hard': returns failed
-    - Otherwise: returns proved with sorries filled
+    - Otherwise: returns proved
 
     If wait=False, stores the proof job and returns a project_id for polling.
 
@@ -70,15 +64,6 @@ def mock_prove(
     # Silence unused argument warnings - these are part of the API
     _ = context_files
     _ = hint
-
-    # Count sorries in the input
-    matches: list[str] = _SORRY_PATTERN.findall(code)
-    sorry_count = len(matches)
-
-    if sorry_count == 0:
-        return ProveResult(
-            status="error", message="No 'sorry' statements found in the provided code"
-        )
 
     # Determine what the final result will be
     final_code: str | None
@@ -102,12 +87,10 @@ def mock_prove(
         )
     else:
         final_status = "proved"
-        final_code = _SORRY_PATTERN.sub(
-            "simp [add_comm, add_assoc, mul_comm]  -- filled by Aristotle",
-            code,
-        )
+        # Return the code with a mock proof comment appended
+        final_code = code + "\n-- Proof filled by Aristotle (mock)"
         final_counterexample = None
-        final_message = f"Successfully filled {sorry_count} sorry statement(s)"
+        final_message = "Successfully proved"
 
     # Generate a project ID
     project_id = f"mock-{uuid.uuid4()}"
@@ -206,22 +189,10 @@ def mock_prove_file(
         wait: If True, return result immediately. If False, return project_id for polling.
 
     Returns:
-        ProveFileResult with status and counts
+        ProveFileResult with status
     """
     if not os.path.exists(file_path):
         return ProveFileResult(status="error", message=f"File not found: {file_path}")
-
-    # Read the file to count sorries
-    with open(file_path) as f:
-        content = f.read()
-
-    content_matches: list[str] = _SORRY_PATTERN.findall(content)
-    sorry_count = len(content_matches)
-
-    if sorry_count == 0:
-        return ProveFileResult(
-            status="error", sorries_total=0, message="No 'sorry' statements found in the file"
-        )
 
     # Determine output path (matches aristotlelib's default naming)
     if output_path is None:
@@ -235,15 +206,16 @@ def mock_prove_file(
             message=f"Output file already exists: {output_path}",
         )
 
-    # Determine final result
-    if sorry_count > 5:
+    # Determine final result based on filename for testing different scenarios
+    if "partial" in file_path.lower():
         final_status = "partial"
-        filled = sorry_count - 2
-        final_message = f"Filled {filled} of {sorry_count} sorry statements"
+        final_message = "Some proofs could not be completed"
+    elif "fail" in file_path.lower():
+        final_status = "failed"
+        final_message = "Could not find proofs within the time limit"
     else:
         final_status = "proved"
-        filled = sorry_count
-        final_message = f"Successfully filled all {sorry_count} sorry statement(s)"
+        final_message = "Successfully proved"
 
     # Generate project ID
     project_id = f"mock-file-{uuid.uuid4()}"
@@ -254,14 +226,11 @@ def mock_prove_file(
             _mock_file_projects[project_id] = _MockFileProjectData(
                 status=final_status,
                 output_path=output_path,
-                sorries_filled=filled,
-                sorries_total=sorry_count,
                 message=final_message,
                 poll_count=0,
             )
         return ProveFileResult(
             status="submitted",
-            sorries_total=sorry_count,
             project_id=project_id,
             message="Proof submitted. Use check_prove_file to poll for results.",
         )
@@ -270,8 +239,6 @@ def mock_prove_file(
     return ProveFileResult(
         status=final_status,
         output_path=output_path,
-        sorries_filled=filled,
-        sorries_total=sorry_count,
         project_id=project_id,
         percent_complete=100,
         message=final_message,
@@ -308,7 +275,6 @@ def mock_check_prove_file(project_id: str) -> ProveFileResult:
         if poll_count == 1:
             return ProveFileResult(
                 status="queued",
-                sorries_total=project["sorries_total"],
                 project_id=project_id,
                 percent_complete=0,
                 message="Proof is queued, waiting to start",
@@ -316,7 +282,6 @@ def mock_check_prove_file(project_id: str) -> ProveFileResult:
         elif poll_count == 2:
             return ProveFileResult(
                 status="in_progress",
-                sorries_total=project["sorries_total"],
                 project_id=project_id,
                 percent_complete=50,
                 message="Proof is being computed (50% complete)",
@@ -326,8 +291,6 @@ def mock_check_prove_file(project_id: str) -> ProveFileResult:
             return ProveFileResult(
                 status=project["status"],
                 output_path=project["output_path"],
-                sorries_filled=project["sorries_filled"],
-                sorries_total=project["sorries_total"],
                 project_id=project_id,
                 percent_complete=100,
                 message=project["message"],
@@ -351,47 +314,57 @@ def mock_formalize(
     Returns:
         FormalizeResult with status and Lean code
     """
-    description_lower = description.lower()
-
     # Add context import if provided
     context_header = ""
     if context_file:
         context_name = os.path.splitext(os.path.basename(context_file))[0]
         context_header = f"-- Using context from: {context_file}\nimport {context_name}\n\n"
 
+    description_lower = description.lower()
+
     # Generate different formalizations based on keywords
     if "even" in description_lower and "sum" in description_lower:
-        lean_code = """def even (n : Nat) : Prop := ∃ k, n = 2 * k
+        if prove:
+            lean_code = """def even (n : Nat) : Prop := ∃ k, n = 2 * k
+
+theorem sum_of_evens (a b : Nat) (ha : even a) (hb : even b) : even (a + b) := by
+  obtain ⟨ka, hka⟩ := ha; obtain ⟨kb, hkb⟩ := hb; exact ⟨ka + kb, by omega⟩"""
+        else:
+            lean_code = """def even (n : Nat) : Prop := ∃ k, n = 2 * k
 
 theorem sum_of_evens (a b : Nat) (ha : even a) (hb : even b) : even (a + b) := by
   sorry"""
-        if prove:
-            lean_code = lean_code.replace(
-                "sorry",
-                "obtain ⟨ka, hka⟩ := ha; obtain ⟨kb, hkb⟩ := hb; exact ⟨ka + kb, by omega⟩",
-            )
 
     elif "prime" in description_lower:
-        lean_code = """def prime (n : Nat) : Prop := n > 1 ∧ ∀ m, m ∣ n → m = 1 ∨ m = n
+        if prove:
+            lean_code = """def prime (n : Nat) : Prop := n > 1 ∧ ∀ m, m ∣ n → m = 1 ∨ m = n
+
+theorem prime_example : prime 7 := by
+  decide"""
+        else:
+            lean_code = """def prime (n : Nat) : Prop := n > 1 ∧ ∀ m, m ∣ n → m = 1 ∨ m = n
 
 theorem prime_example : prime 7 := by
   sorry"""
-        if prove:
-            lean_code = lean_code.replace("sorry", "decide")
 
     elif "commut" in description_lower:
-        lean_code = """theorem add_comm_example (a b : Nat) : a + b = b + a := by
-  sorry"""
         if prove:
-            lean_code = lean_code.replace("sorry", "ring")
+            lean_code = """theorem add_comm_example (a b : Nat) : a + b = b + a := by
+  ring"""
+        else:
+            lean_code = """theorem add_comm_example (a b : Nat) : a + b = b + a := by
+  sorry"""
 
     else:
         # Generic formalization
-        lean_code = f"""-- Formalization of: {description}
+        if prove:
+            lean_code = f"""-- Formalization of: {description}
+theorem statement : True := by
+  trivial"""
+        else:
+            lean_code = f"""-- Formalization of: {description}
 theorem statement : True := by
   sorry"""
-        if prove:
-            lean_code = lean_code.replace("sorry", "trivial")
 
     lean_code = context_header + lean_code
     status = "proved" if prove else "formalized"

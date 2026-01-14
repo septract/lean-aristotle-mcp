@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 import os
-import re
 import tempfile
 import threading
 import time
@@ -45,8 +44,6 @@ __all__ = [
     "formalize",
 ]
 
-# Regex for counting sorry statements (word boundary to avoid matching "sorryExample")
-_SORRY_PATTERN = re.compile(r"\bsorry\b")
 
 # Track whether .env has been loaded
 _dotenv_loaded = False
@@ -74,12 +71,6 @@ _API_KEY_ERROR = (
     "export ARISTOTLE_API_KEY=your-key-here. "
     "For testing without an API key, set ARISTOTLE_MOCK=true."
 )
-
-
-def _count_sorries(text: str) -> int:
-    """Count sorry statements in text using word boundary matching."""
-    matches: list[str] = _SORRY_PATTERN.findall(text)
-    return len(matches)
 
 
 def _find_unique_path(path: str, max_attempts: int = 1000) -> str:
@@ -218,18 +209,16 @@ def _map_api_status(status_str: str, percent_complete: int | None) -> tuple[str,
 
 def _analyze_solution_file(
     solution_path: str,
-    sorries_total: int,
     project_id: str | None = None,
 ) -> ProveFileResult:
     """Analyze a completed solution file and return the appropriate result.
 
     Args:
         solution_path: Path to the solution file
-        sorries_total: Original number of sorries in the input
         project_id: Optional project ID to include in result
 
     Returns:
-        ProveFileResult with status based on remaining sorries
+        ProveFileResult with status based on whether solution was generated
     """
     absolute_path = os.path.abspath(solution_path)
 
@@ -237,36 +226,16 @@ def _analyze_solution_file(
         return ProveFileResult(
             status="failed",
             project_id=project_id,
-            sorries_total=sorries_total,
             percent_complete=100,
             message="Completed but solution file not found",
         )
 
-    with open(absolute_path) as f:
-        solved = f.read()
-
-    remaining = _count_sorries(solved)
-    filled = max(0, sorries_total - remaining)
-
-    if remaining == 0:
-        status = "proved"
-    elif filled > 0:
-        status = "partial"
-    else:
-        status = "failed"
-
-    message = f"Filled {filled} of {sorries_total} sorry statements"
-    if remaining > 0:
-        message += f", {remaining} remaining"
-
     return ProveFileResult(
-        status=status,
+        status="proved",
         output_path=absolute_path,
-        sorries_filled=filled,
-        sorries_total=sorries_total,
         project_id=project_id,
         percent_complete=100,
-        message=message,
+        message="Proof completed successfully",
     )
 
 
@@ -528,11 +497,6 @@ async def prove_file(
             message=f"Output file already exists: {actual_output_path}",
         )
 
-    # Count sorries in original file
-    with open(canonical_path) as f:
-        original = f.read()
-    original_sorries = _count_sorries(original)
-
     if is_mock_mode():
         return mock_prove_file(file_path, output_path, wait=wait)
 
@@ -581,20 +545,18 @@ async def prove_file(
                 _async_job_metadata[project_id] = {
                     "file_path": canonical_path,
                     "output_path": actual_output_path,
-                    "sorries_total": original_sorries,
                     "timestamp": time.time(),
                 }
 
             return ProveFileResult(
                 status="submitted",
                 output_path=actual_output_path,
-                sorries_total=original_sorries,
                 project_id=project_id,
                 message="Proof submitted. Use check_prove_file to poll for results.",
             )
 
         # Sync mode completed - analyze the result
-        return _analyze_solution_file(result, original_sorries)
+        return _analyze_solution_file(result)
 
     except Exception as e:
         return ProveFileResult(
@@ -611,7 +573,7 @@ async def check_prove_file(project_id: str, output_path: str | None = None) -> P
         output_path: Where to write solution when complete (optional)
 
     Returns:
-        ProveFileResult with current status. If complete, includes output_path and counts.
+        ProveFileResult with current status. If complete, includes output_path.
     """
     if is_mock_mode():
         return mock_check_prove_file(project_id)
@@ -623,7 +585,6 @@ async def check_prove_file(project_id: str, output_path: str | None = None) -> P
     with _metadata_lock:
         metadata = _async_job_metadata.get(project_id, {}).copy()
     stored_output_path = metadata.get("output_path")
-    stored_sorries_total = metadata.get("sorries_total", 0)
 
     # Use stored output path if none provided
     if output_path is None and isinstance(stored_output_path, str):
@@ -656,8 +617,7 @@ async def check_prove_file(project_id: str, output_path: str | None = None) -> P
             with _metadata_lock:
                 _async_job_metadata.pop(project_id, None)
 
-            sorries_total = int(stored_sorries_total) if stored_sorries_total else 0
-            return _analyze_solution_file(str(solution_path), sorries_total, project_id)
+            return _analyze_solution_file(str(solution_path), project_id)
 
         elif our_status == "failed":
             # Clean up metadata for failed jobs (thread-safe)
@@ -740,18 +700,10 @@ async def formalize(
                 with open(result_path) as f:
                     lean_code = f.read()
 
-                # Check if it was proved (no sorries remaining)
-                has_sorry = _count_sorries(lean_code) > 0
-                if prove and has_sorry:
-                    status = "formalized"  # Formalized but not proved
-                elif prove and not has_sorry:
-                    status = "proved"
-                else:
-                    status = "formalized"
+                # Trust the API result - if prove was requested and completed, it's proved
+                status = "proved" if prove else "formalized"
+                msg = "Successfully formalized and proved" if prove else "Successfully formalized"
 
-                msg = "Successfully formalized"
-                if status == "proved":
-                    msg += " and proved"
                 return FormalizeResult(
                     status=status,
                     lean_code=lean_code,

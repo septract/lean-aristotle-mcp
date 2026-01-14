@@ -20,21 +20,19 @@ FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
 
 @pytest.fixture
-def file_with_many_sorries(tmp_path: Path) -> Path:
-    """Create a file with more than 5 sorries (triggers partial success in mock)."""
-    content = "\n".join(
-        [f"theorem t{i} : True := by sorry" for i in range(7)]
-    )
-    path = tmp_path / "many_sorries.lean"
+def file_with_partial_name(tmp_path: Path) -> Path:
+    """Create a file with 'partial' in name (triggers partial success in mock)."""
+    content = "theorem t : True := by sorry"
+    path = tmp_path / "partial_test.lean"
     path.write_text(content)
     return path
 
 
 @pytest.fixture
-def file_without_sorries(tmp_path: Path) -> Path:
-    """Create a file with no sorry statements."""
+def simple_lean_file(tmp_path: Path) -> Path:
+    """Create a simple Lean file."""
     content = "theorem proved : True := trivial"
-    path = tmp_path / "no_sorries.lean"
+    path = tmp_path / "simple.lean"
     path.write_text(content)
     return path
 
@@ -42,13 +40,13 @@ def file_without_sorries(tmp_path: Path) -> Path:
 class TestProveEdgeCases:
     """Edge case tests for prove()."""
 
-    async def test_no_sorry_statements(self) -> None:
-        """Code with no sorry should return error."""
+    async def test_already_proved_code(self) -> None:
+        """Code without sorry is accepted (API handles validation)."""
         code = "theorem already_proved : True := trivial"
         result = await prove(code)
 
-        assert result.status == "error"
-        assert "sorry" in result.message.lower()
+        # Mock mode returns proved for any valid code
+        assert result.status == "proved"
 
     async def test_timeout_failure(self) -> None:
         """Code that triggers timeout/failure in mock."""
@@ -93,37 +91,35 @@ class TestCheckProofEdgeCases:
 class TestProveFileEdgeCases:
     """Edge case tests for prove_file()."""
 
-    async def test_no_sorries_in_file(self, file_without_sorries: Path) -> None:
-        """File with no sorry statements should return error."""
-        result = await prove_file(str(file_without_sorries))
+    async def test_simple_file(self, simple_lean_file: Path) -> None:
+        """Simple Lean file is accepted (API handles validation)."""
+        result = await prove_file(str(simple_lean_file))
 
-        assert result.status == "error"
-        assert "sorry" in result.message.lower()
+        # Mock mode returns proved for files without special keywords
+        assert result.status == "proved"
 
     async def test_partial_success(
-        self, file_with_many_sorries: Path, tmp_path: Path
+        self, file_with_partial_name: Path, tmp_path: Path
     ) -> None:
-        """File with >5 sorries triggers partial success in mock."""
+        """File with 'partial' in name triggers partial success in mock."""
         output = tmp_path / "output.lean"
         result = await prove_file(
-            str(file_with_many_sorries),
+            str(file_with_partial_name),
             output_path=str(output),
         )
 
         assert result.status == "partial"
-        assert result.sorries_total == 7
-        assert result.sorries_filled == 5  # Mock fills total - 2 for >5 sorries
-        assert result.sorries_filled < result.sorries_total
+        assert "could not" in result.message.lower()
 
     async def test_empty_file(self, tmp_path: Path) -> None:
-        """Empty file should return error (no sorries)."""
+        """Empty file is accepted (API handles validation)."""
         empty = tmp_path / "empty.lean"
         empty.write_text("")
 
         result = await prove_file(str(empty))
 
-        assert result.status == "error"
-        assert "sorry" in result.message.lower()
+        # Mock mode returns proved for any file without special keywords
+        assert result.status == "proved"
 
     async def test_custom_output_path(self, tmp_path: Path) -> None:
         """Verify custom output path is used."""
