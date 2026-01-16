@@ -131,7 +131,7 @@ Or set in your configuration:
 
 ## Usage Notes
 
-- **Proofs take time:** Aristotle proofs typically take 1-5 minutes. The tools support async mode (`wait=False`) for non-blocking operation.
+- **Proofs take time:** Aristotle proofs can take anywhere from a few minutes to several hours depending on complexity. Simple proofs may complete in 1-5 minutes, but complex proofs can take significantly longer. The tools support async mode (`wait=False`) for non-blocking operation—this is strongly recommended for anything non-trivial.
 - **Lean 4 only:** Aristotle works with Lean 4, not Lean 3 or earlier versions.
 - **Mathlib support:** File-based proving automatically resolves Lake dependencies including Mathlib.
 
