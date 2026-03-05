@@ -45,6 +45,7 @@ async def prove_tool(
     context_files: list[str] | None = None,
     hint: str | None = None,
     wait: bool = True,
+    verbose: bool = False,
 ) -> ResultDict:
     """Attempt to prove Lean 4 code containing `sorry` statements.
 
@@ -62,6 +63,8 @@ async def prove_tool(
         hint: Optional natural language hint to guide the prover
         wait: If True (default), block until proof completes. If False, submit
               the proof and return immediately with a project_id for polling.
+        verbose: If True, return full proof code. If False (default), large
+                 outputs are truncated to a preview to save context tokens.
 
     Returns:
         JSON with status, code/counterexample, and message.
@@ -71,11 +74,11 @@ async def prove_tool(
         Generated proofs require `import Mathlib.Tactic` to run.
     """
     result = await prove(code=code, context_files=context_files, hint=hint, wait=wait)
-    return result.to_dict()
+    return result.to_dict(verbose=verbose)
 
 
 @mcp.tool(name="check_proof")
-async def check_proof_tool(project_id: str) -> ResultDict:
+async def check_proof_tool(project_id: str, verbose: bool = False) -> ResultDict:
     """Poll for the status of a previously submitted proof.
 
     Use this tool to poll for results after calling prove with wait=False.
@@ -86,6 +89,8 @@ async def check_proof_tool(project_id: str) -> ResultDict:
 
     Args:
         project_id: The project ID returned from prove(wait=False)
+        verbose: If True, return full proof code. If False (default), large
+                 outputs are truncated to a preview to save context tokens.
 
     Returns:
         JSON with current status and progress. Fields:
@@ -95,7 +100,7 @@ async def check_proof_tool(project_id: str) -> ResultDict:
         - message: Human-readable status description
     """
     result = await check_proof(project_id=project_id)
-    return result.to_dict()
+    return result.to_dict(verbose=verbose)
 
 
 @mcp.tool(name="prove_file")
@@ -166,6 +171,7 @@ async def formalize_tool(
     prove: bool = False,
     context_file: str | None = None,
     wait: bool = True,
+    verbose: bool = False,
 ) -> ResultDict:
     """Convert a natural language mathematical statement into Lean 4 code.
 
@@ -182,6 +188,8 @@ async def formalize_tool(
                       this accepts only one file per the underlying API.)
         wait: If True (default), block until complete. If False, submit
               and return immediately with project_id for polling.
+        verbose: If True, return full Lean code. If False (default), large
+                 outputs are truncated to a preview to save context tokens.
 
     Returns:
         JSON with status (formalized/proved/failed/error), lean_code, and message.
@@ -193,11 +201,11 @@ async def formalize_tool(
     result = await formalize(
         description=description, prove=prove, context_file=context_file, wait=wait
     )
-    return result.to_dict()
+    return result.to_dict(verbose=verbose)
 
 
 @mcp.tool(name="check_formalize")
-async def check_formalize_tool(project_id: str) -> ResultDict:
+async def check_formalize_tool(project_id: str, verbose: bool = False) -> ResultDict:
     """Poll for the status of a previously submitted formalization.
 
     Use this tool to poll for results after calling formalize with wait=False.
@@ -208,6 +216,8 @@ async def check_formalize_tool(project_id: str) -> ResultDict:
 
     Args:
         project_id: The project ID returned from formalize(wait=False)
+        verbose: If True, return full Lean code. If False (default), large
+                 outputs are truncated to a preview to save context tokens.
 
     Returns:
         JSON with current status and progress. Fields:
@@ -217,7 +227,7 @@ async def check_formalize_tool(project_id: str) -> ResultDict:
         - message: Human-readable status description
     """
     result = await check_formalize(project_id=project_id)
-    return result.to_dict()
+    return result.to_dict(verbose=verbose)
 
 
 @mcp.resource("aristotle://status")
