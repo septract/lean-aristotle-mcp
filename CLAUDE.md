@@ -93,12 +93,14 @@ src/aristotle_mcp/
 
 ## MCP Tools Provided
 
-1. **`prove`** - Fill in `sorry` statements in Lean 4 code. Supports async mode with `wait=False`.
-2. **`check_proof`** - Poll status of async proof submissions from `prove`.
+1. **`prove`** - Fill in `sorry` statements in Lean 4 code. Supports async (`wait=False`) and `verbose=True` for full output.
+2. **`check_proof`** - Poll status of async proof submissions. Supports `verbose=True`.
 3. **`prove_file`** - Prove all sorries in a Lean file with automatic import resolution. Supports async mode.
 4. **`check_prove_file`** - Poll status of async file proofs. Use `save=True` to write the solution file.
-5. **`formalize`** - Convert natural language math to Lean 4 code. Supports async mode with `wait=False`.
-6. **`check_formalize`** - Poll status of async formalization jobs.
+5. **`formalize`** - Convert natural language math to Lean 4 code. Supports async (`wait=False`) and `verbose=True`.
+6. **`check_formalize`** - Poll status of async formalization jobs. Supports `verbose=True`.
+
+**Response truncation:** By default, large code fields (over 4000 chars) are truncated to a preview with metadata (`code_preview`, `code_lines`, `code_bytes`, `truncated`, `hint`). Pass `verbose=True` to get the full output. `prove_file`/`check_prove_file` are unaffected (they return file paths, not inline code).
 
 ## MCP Resources
 
@@ -111,6 +113,7 @@ tests/
 ├── test_mock.py       # Mock mode tests (no API key needed)
 ├── test_helpers.py    # Unit tests for helper functions and models
 ├── test_edge_cases.py # Edge case and error handling tests
+├── test_truncation.py # Response truncation and verbose parameter tests
 ├── test_api.py        # Direct aristotlelib API tests (requires API key)
 ├── test_api_tools.py  # Live API tool tests (requires API key)
 ├── fixtures/

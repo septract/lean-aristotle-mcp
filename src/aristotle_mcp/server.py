@@ -34,7 +34,10 @@ mcp: FastMCP[None] = FastMCP(
         "in a tight loop. Instead, inform the user that the proof is running and either: "
         "(1) continue with other work and check back later, or (2) ask the user when they'd "
         "like to check the status. Polling frequently wastes resources and provides no "
-        "benefit since even simple proofs take several minutes."
+        "benefit since even simple proofs take several minutes.\n\n"
+        "IMPORTANT: By default, large outputs are truncated to a preview to save context "
+        "tokens. If you need the full code, pass verbose=True. Alternatively, use prove_file "
+        "which writes results directly to disk."
     ),
 )
 
@@ -45,6 +48,7 @@ async def prove_tool(
     context_files: list[str] | None = None,
     hint: str | None = None,
     wait: bool = True,
+    verbose: bool = False,
 ) -> ResultDict:
     """Attempt to prove Lean 4 code containing `sorry` statements.
 
@@ -62,20 +66,24 @@ async def prove_tool(
         hint: Optional natural language hint to guide the prover
         wait: If True (default), block until proof completes. If False, submit
               the proof and return immediately with a project_id for polling.
+        verbose: If True, return full proof code. If False (default), large
+                 outputs are truncated to a preview to save context tokens.
 
     Returns:
-        JSON with status, code/counterexample, and message.
+        JSON with status, message, and proof results. By default, large code
+        fields are truncated to a preview (code_preview, code_lines, code_bytes,
+        truncated, hint). Use verbose=True for the full code field.
         If wait=False, returns status="submitted" with project_id to use with check_proof.
 
     Note:
         Generated proofs require `import Mathlib.Tactic` to run.
     """
     result = await prove(code=code, context_files=context_files, hint=hint, wait=wait)
-    return result.to_dict()
+    return result.to_dict(verbose=verbose)
 
 
 @mcp.tool(name="check_proof")
-async def check_proof_tool(project_id: str) -> ResultDict:
+async def check_proof_tool(project_id: str, verbose: bool = False) -> ResultDict:
     """Poll for the status of a previously submitted proof.
 
     Use this tool to poll for results after calling prove with wait=False.
@@ -86,16 +94,19 @@ async def check_proof_tool(project_id: str) -> ResultDict:
 
     Args:
         project_id: The project ID returned from prove(wait=False)
+        verbose: If True, return full proof code. If False (default), large
+                 outputs are truncated to a preview to save context tokens.
 
     Returns:
         JSON with current status and progress. Fields:
         - status: "queued" | "in_progress" | "proved" | "failed" | "error"
         - percent_complete: 0-100 progress indicator
-        - code: The proof (when status is "proved")
+        - code: The proof (when status is "proved" and verbose=True)
+        - code_preview/code_lines/code_bytes: Truncated preview (when verbose=False, default)
         - message: Human-readable status description
     """
     result = await check_proof(project_id=project_id)
-    return result.to_dict()
+    return result.to_dict(verbose=verbose)
 
 
 @mcp.tool(name="prove_file")
@@ -166,6 +177,7 @@ async def formalize_tool(
     prove: bool = False,
     context_file: str | None = None,
     wait: bool = True,
+    verbose: bool = False,
 ) -> ResultDict:
     """Convert a natural language mathematical statement into Lean 4 code.
 
@@ -182,9 +194,13 @@ async def formalize_tool(
                       this accepts only one file per the underlying API.)
         wait: If True (default), block until complete. If False, submit
               and return immediately with project_id for polling.
+        verbose: If True, return full Lean code. If False (default), large
+                 outputs are truncated to a preview to save context tokens.
 
     Returns:
-        JSON with status (formalized/proved/failed/error), lean_code, and message.
+        JSON with status (formalized/proved/failed/error), and Lean code. By default,
+        large lean_code fields are truncated to a preview. Use verbose=True for the
+        full lean_code field.
         If wait=False, returns status="submitted" with project_id for polling.
 
     Note:
@@ -193,11 +209,11 @@ async def formalize_tool(
     result = await formalize(
         description=description, prove=prove, context_file=context_file, wait=wait
     )
-    return result.to_dict()
+    return result.to_dict(verbose=verbose)
 
 
 @mcp.tool(name="check_formalize")
-async def check_formalize_tool(project_id: str) -> ResultDict:
+async def check_formalize_tool(project_id: str, verbose: bool = False) -> ResultDict:
     """Poll for the status of a previously submitted formalization.
 
     Use this tool to poll for results after calling formalize with wait=False.
@@ -208,16 +224,20 @@ async def check_formalize_tool(project_id: str) -> ResultDict:
 
     Args:
         project_id: The project ID returned from formalize(wait=False)
+        verbose: If True, return full Lean code. If False (default), large
+                 outputs are truncated to a preview to save context tokens.
 
     Returns:
         JSON with current status and progress. Fields:
         - status: "queued" | "in_progress" | "formalized" | "proved" | "failed" | "error"
         - percent_complete: 0-100 progress indicator
-        - lean_code: The formalized Lean code (when complete)
+        - lean_code: The formalized Lean code (when complete and verbose=True)
+        - lean_code_preview/lean_code_lines/lean_code_bytes: Truncated preview
+          (when verbose=False, the default)
         - message: Human-readable status description
     """
     result = await check_formalize(project_id=project_id)
-    return result.to_dict()
+    return result.to_dict(verbose=verbose)
 
 
 @mcp.resource("aristotle://status")

@@ -132,6 +132,7 @@ Or set in your configuration:
 ## Usage Notes
 
 - **Proofs take time:** Aristotle proofs can take anywhere from a few minutes to several hours depending on complexity. Simple proofs may complete in 1-5 minutes, but complex proofs can take significantly longer. The tools support async mode (`wait=False`) for non-blocking operation—this is strongly recommended for anything non-trivial.
+- **Response truncation:** By default, large code outputs are truncated to a preview to save LLM context tokens. Pass `verbose=True` to any tool to get the full output, or use `prove_file` which writes results to disk instead.
 - **Lean 4 only:** Aristotle works with Lean 4, not Lean 3 or earlier versions.
 - **Mathlib support:** File-based proving automatically resolves Lake dependencies including Mathlib.
 
@@ -161,7 +162,7 @@ Use async mode for long-running proofs to avoid blocking:
 - To save the result, call with `save=True`
 - If `output_path` is omitted, uses the path from the original `prove_file` call (stored for 30 days)
 - You can override `output_path` to save to a different location
-- `check_proof` and `check_formalize` return the code directly in the response (no `save` parameter needed)
+- `check_proof` and `check_formalize` return the code in the response (no `save` parameter needed). By default, large outputs are truncated to a preview — use `verbose=True` for the full code
 
 ## Context Files
 

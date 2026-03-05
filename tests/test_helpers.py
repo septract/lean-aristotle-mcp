@@ -138,9 +138,15 @@ class TestProveResultToDict:
         assert d == {"status": "proved", "message": "Success"}
 
     def test_with_code(self) -> None:
-        """Result with code included."""
+        """Result with short code included (under truncation limit)."""
         result = ProveResult(status="proved", code="theorem x := y", message="Done")
         d = result.to_dict()
+        assert d["code"] == "theorem x := y"
+
+    def test_with_code_verbose(self) -> None:
+        """Result with verbose=True returns code regardless of size."""
+        result = ProveResult(status="proved", code="theorem x := y", message="Done")
+        d = result.to_dict(verbose=True)
         assert d["code"] == "theorem x := y"
 
     def test_with_counterexample(self) -> None:
@@ -223,13 +229,23 @@ class TestFormalizeResultToDict:
         assert d == {"status": "formalized", "message": "Done"}
 
     def test_with_lean_code(self) -> None:
-        """Result with lean_code."""
+        """Result with short lean_code (under truncation limit)."""
         result = FormalizeResult(
             status="formalized",
             lean_code="theorem x : True := trivial",
             message="Formalized",
         )
         d = result.to_dict()
+        assert d["lean_code"] == "theorem x : True := trivial"
+
+    def test_with_lean_code_verbose(self) -> None:
+        """Result with verbose=True returns lean_code regardless of size."""
+        result = FormalizeResult(
+            status="formalized",
+            lean_code="theorem x : True := trivial",
+            message="Formalized",
+        )
+        d = result.to_dict(verbose=True)
         assert d["lean_code"] == "theorem x : True := trivial"
 
     def test_with_project_id(self) -> None:
